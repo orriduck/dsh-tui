@@ -8,15 +8,23 @@ import type {
   AskUserQuestionItem,
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
-import type { ResolvedTheme, ThemePreference, ThemeSource } from './theme.js'
+import type { ResolvedTheme, ThemeSource } from './theme.js'
+
+type ToolTranscriptItem = {
+  id: string
+  kind: 'tool'
+  name: string
+  detail: string
+  status: 'running' | 'done' | 'error'
+}
 
 export type TranscriptItem =
   | { id: string; kind: 'user'; text: string }
   | { id: string; kind: 'assistant'; text: string }
   | { id: string; kind: 'system'; text: string }
-  | { id: string; kind: 'tool'; name: string; detail: string; status: 'running' | 'done' | 'error' }
+  | ToolTranscriptItem
 
-export interface InteractionPrompt {
+interface InteractionPrompt {
   kind: 'approval' | 'question'
   title: string
   detail?: string
@@ -24,8 +32,9 @@ export interface InteractionPrompt {
   multiSelect?: boolean
 }
 
-export interface TuiState {
+interface TuiState {
   items: TranscriptItem[]
+  activeTools: ToolTranscriptItem[]
   status: AgentStatus | 'starting'
   title: string
   sessionId: string | undefined
@@ -35,9 +44,7 @@ export interface TuiState {
   interaction: InteractionPrompt | undefined
   notice: string | undefined
   theme: ResolvedTheme
-  themePreference: ThemePreference
   themeSource: ThemeSource
-  themeConfigPath: string | undefined
 }
 
 type Listener = () => void
@@ -75,6 +82,7 @@ function normalizeAnswer(input: string): string {
 export class TuiController {
   private state: TuiState = {
     items: [],
+    activeTools: [],
     status: 'starting',
     title: 'New session',
     sessionId: undefined,
@@ -84,14 +92,14 @@ export class TuiController {
     interaction: undefined,
     notice: undefined,
     theme: 'dark',
-    themePreference: 'system',
     themeSource: 'fallback',
-    themeConfigPath: undefined,
   }
   private readonly listeners = new Set<Listener>()
   private agent: Agent | undefined
   private pendingAnswer: ((value: string) => void) | undefined
   private exitRequested = false
+  private historyItems: TranscriptItem[] | undefined
+  private historyChanged = false
 
   constructor(private readonly onExit: () => Promise<void>) {}
 
@@ -102,13 +110,26 @@ export class TuiController {
 
   readonly snapshot = (): TuiState => this.state
 
-  private update(patch: Partial<TuiState>): void {
-    this.state = { ...this.state, ...patch }
+  private notify(): void {
     for (const listener of this.listeners) listener()
   }
 
-  private append(item: TranscriptItem): void {
-    this.update({ items: [...this.state.items, item] })
+  private update(patch: Partial<TuiState>): void {
+    this.state = { ...this.state, ...patch }
+    if (this.historyItems !== undefined) {
+      this.historyChanged = true
+      return
+    }
+    this.notify()
+  }
+
+  private append(item: TranscriptItem, patch: Partial<TuiState> = {}): void {
+    if (this.historyItems !== undefined) {
+      this.historyItems.push(item)
+      this.update(patch)
+      return
+    }
+    this.update({ ...patch, items: [...this.state.items, item] })
   }
 
   bindAgent(agent: Agent): void {
@@ -124,22 +145,27 @@ export class TuiController {
     this.update({ status })
   }
 
-  setTheme(theme: {
-    resolved: ResolvedTheme
-    preference: ThemePreference
-    source: ThemeSource
-    configPath: string
-  }): void {
+  setTheme(theme: { resolved: ResolvedTheme; source: ThemeSource }): void {
     this.update({
       theme: theme.resolved,
-      themePreference: theme.preference,
       themeSource: theme.source,
-      themeConfigPath: theme.configPath,
     })
   }
 
   loadHistory(events: readonly SessionEvent[]): void {
-    for (const event of events) this.ingest(event)
+    if (events.length === 0) return
+    this.historyItems = [...this.state.items]
+    this.historyChanged = false
+    try {
+      for (const event of events) this.ingest(event)
+    } finally {
+      const items = this.historyItems
+      const changed = this.historyChanged
+      this.historyItems = undefined
+      this.historyChanged = false
+      this.state = { ...this.state, items }
+      if (changed) this.notify()
+    }
   }
 
   ingest(event: SessionEvent): void {
@@ -171,39 +197,67 @@ export class TuiController {
       case 'assistant/message': {
         const text = messageText(data.message)
         const finalText = text || this.state.streamingText
-        if (finalText !== '') this.append({ id: `event-${event.seq}`, kind: 'assistant', text: finalText })
-        this.update({ streamingText: '', reasoningText: '' })
+        if (finalText !== '') {
+          this.append(
+            { id: `event-${event.seq}`, kind: 'assistant', text: finalText },
+            { streamingText: '', reasoningText: '' },
+          )
+        } else {
+          this.update({ streamingText: '', reasoningText: '' })
+        }
         break
       }
       case 'tool/call': {
         const callId = String(data.callId ?? event.seq)
         const toolName = String(data.name ?? 'tool')
         const detail = typeof data.arguments === 'string' ? truncate(data.arguments) : ''
-        this.append({ id: `tool-${callId}`, kind: 'tool', name: toolName, detail, status: 'running' })
+        const item: ToolTranscriptItem = {
+          id: `tool-${callId}`,
+          kind: 'tool',
+          name: toolName,
+          detail,
+          status: 'running',
+        }
+        this.update({ activeTools: [...this.state.activeTools, item] })
         break
       }
       case 'tool/result': {
-        const callId = String(data.callId ?? '')
+        const message = data.message as Record<string, unknown> | undefined
+        const source = message?.source as Record<string, unknown> | undefined
+        const callId = String(source?.callId ?? data.callId ?? '')
         const id = `tool-${callId}`
-        const resultText = truncate(contentText(data.message))
+        const resultText = truncate(contentText(message))
         const failed = data.error !== undefined
-        const items = this.state.items.map(item => item.id === id && item.kind === 'tool'
-          ? { ...item, detail: resultText || item.detail, status: failed ? 'error' as const : 'done' as const }
-          : item)
-        this.update({ items })
+        const pending = this.state.activeTools.find(item => item.id === id)
+        if (pending === undefined) break
+        const completed: ToolTranscriptItem = {
+          id,
+          kind: 'tool',
+          name: pending.name,
+          detail: resultText || pending.detail,
+          status: failed ? 'error' : 'done',
+        }
+        this.append(completed, {
+          activeTools: this.state.activeTools.filter(item => item.id !== id),
+        })
         break
       }
       case 'turn/end': {
         const reason = data.reason as Record<string, unknown> | undefined
+        const patch = { streamingText: '', reasoningText: '' }
         if (reason?.kind === 'error') {
           const error = reason.error as Record<string, unknown> | undefined
-          this.append({
-            id: `event-${event.seq}`,
-            kind: 'system',
-            text: `Turn failed: ${String(error?.message ?? 'unknown error')}`,
-          })
+          this.append(
+            {
+              id: `event-${event.seq}`,
+              kind: 'system',
+              text: `Turn failed: ${String(error?.message ?? 'unknown error')}`,
+            },
+            patch,
+          )
+        } else {
+          this.update(patch)
         }
-        this.update({ streamingText: '', reasoningText: '' })
         break
       }
     }

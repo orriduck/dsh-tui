@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 
-export type HerdrAgentState = 'idle' | 'working' | 'blocked'
+type HerdrAgentState = 'idle' | 'working' | 'blocked'
 
 export interface HerdrSnapshot {
   status: 'starting' | 'idle' | 'running'
@@ -9,7 +9,7 @@ export interface HerdrSnapshot {
   title: string
 }
 
-export type HerdrCommandRunner = (args: string[]) => Promise<void>
+type HerdrCommandRunner = (args: string[]) => Promise<void>
 
 const SOURCE = 'dsh-tui'
 const AGENT = 'deepseek'
@@ -90,7 +90,7 @@ export class HerdrBridge {
     }
 
     const title = snapshot.title.trim().slice(0, 120)
-    if (title !== '' && title !== this.lastTitle) {
+    if (snapshot.sessionId !== undefined && title !== '' && title !== this.lastTitle) {
       this.lastTitle = title
       void this.enqueue([
         'pane', 'report-metadata', this.paneId,
@@ -111,5 +111,3 @@ export class HerdrBridge {
     ])
   }
 }
-
-export const internals = { agentState }

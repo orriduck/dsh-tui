@@ -56,6 +56,14 @@ function loadThemePreference(env = process.env) {
       if (code !== "EEXIST") throw error;
     }
   }
+  const environment = env.DSH_TUI_THEME;
+  if (environment !== void 0) {
+    return {
+      preference: parsePreference(environment, "DSH_TUI_THEME"),
+      configPath,
+      explicitEnvironment: true
+    };
+  }
   let document;
   try {
     document = JSON.parse(readFileSync(configPath, "utf8"));
@@ -66,8 +74,7 @@ function loadThemePreference(env = process.env) {
     throw new Error(`theme config ${configPath} must contain a JSON object`);
   }
   const configured = parsePreference(document.theme ?? "system", `${configPath}: theme`);
-  const environment = env.DSH_TUI_THEME;
-  return environment === void 0 ? { preference: configured, configPath, explicitEnvironment: false } : { preference: parsePreference(environment, "DSH_TUI_THEME"), configPath, explicitEnvironment: true };
+  return { preference: configured, configPath, explicitEnvironment: false };
 }
 function normalizedChannel(hex) {
   const parsed = Number.parseInt(hex, 16);
@@ -148,26 +155,22 @@ async function resolveTheme(env = process.env) {
   const loaded = loadThemePreference(env);
   if (loaded.preference !== "system") {
     return {
-      preference: loaded.preference,
       resolved: loaded.preference,
-      source: loaded.explicitEnvironment ? "env" : "config",
-      configPath: loaded.configPath
+      source: loaded.explicitEnvironment ? "env" : "config"
     };
   }
   const terminal = await probeTerminalTheme();
   if (terminal !== void 0) {
-    return { preference: "system", resolved: terminal, source: "terminal", configPath: loaded.configPath };
+    return { resolved: terminal, source: "terminal" };
   }
   const colorEnvironment = colorFgBgTheme(env.COLORFGBG);
   if (colorEnvironment !== void 0) {
-    return { preference: "system", resolved: colorEnvironment, source: "terminal", configPath: loaded.configPath };
+    return { resolved: colorEnvironment, source: "terminal" };
   }
   const system = macOSSystemTheme();
   return {
-    preference: "system",
     resolved: system ?? "dark",
-    source: system === void 0 ? "fallback" : "system",
-    configPath: loaded.configPath
+    source: system === void 0 ? "fallback" : "system"
   };
 }
 
@@ -233,6 +236,7 @@ function App({ controller }) {
       ] })
     ] }) }),
     /* @__PURE__ */ jsx(Static, { items: state.items, children: (item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id) }),
+    state.activeTools.map((item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id)),
     state.reasoningText === "" ? null : /* @__PURE__ */ jsx(Box, { marginTop: 1, children: /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
       "thinking  ",
       state.reasoningText
@@ -293,6 +297,7 @@ var TuiController = class {
   onExit;
   state = {
     items: [],
+    activeTools: [],
     status: "starting",
     title: "New session",
     sessionId: void 0,
@@ -302,25 +307,37 @@ var TuiController = class {
     interaction: void 0,
     notice: void 0,
     theme: "dark",
-    themePreference: "system",
-    themeSource: "fallback",
-    themeConfigPath: void 0
+    themeSource: "fallback"
   };
   listeners = /* @__PURE__ */ new Set();
   agent;
   pendingAnswer;
   exitRequested = false;
+  historyItems;
+  historyChanged = false;
   subscribe = (listener) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
   snapshot = () => this.state;
-  update(patch) {
-    this.state = { ...this.state, ...patch };
+  notify() {
     for (const listener of this.listeners) listener();
   }
-  append(item) {
-    this.update({ items: [...this.state.items, item] });
+  update(patch) {
+    this.state = { ...this.state, ...patch };
+    if (this.historyItems !== void 0) {
+      this.historyChanged = true;
+      return;
+    }
+    this.notify();
+  }
+  append(item, patch = {}) {
+    if (this.historyItems !== void 0) {
+      this.historyItems.push(item);
+      this.update(patch);
+      return;
+    }
+    this.update({ ...patch, items: [...this.state.items, item] });
   }
   bindAgent(agent) {
     this.agent = agent;
@@ -336,13 +353,23 @@ var TuiController = class {
   setTheme(theme) {
     this.update({
       theme: theme.resolved,
-      themePreference: theme.preference,
-      themeSource: theme.source,
-      themeConfigPath: theme.configPath
+      themeSource: theme.source
     });
   }
   loadHistory(events) {
-    for (const event of events) this.ingest(event);
+    if (events.length === 0) return;
+    this.historyItems = [...this.state.items];
+    this.historyChanged = false;
+    try {
+      for (const event of events) this.ingest(event);
+    } finally {
+      const items = this.historyItems;
+      const changed = this.historyChanged;
+      this.historyItems = void 0;
+      this.historyChanged = false;
+      this.state = { ...this.state, items };
+      if (changed) this.notify();
+    }
   }
   ingest(event) {
     const data = event.data;
@@ -373,37 +400,67 @@ var TuiController = class {
       case "assistant/message": {
         const text = messageText(data.message);
         const finalText = text || this.state.streamingText;
-        if (finalText !== "") this.append({ id: `event-${event.seq}`, kind: "assistant", text: finalText });
-        this.update({ streamingText: "", reasoningText: "" });
+        if (finalText !== "") {
+          this.append(
+            { id: `event-${event.seq}`, kind: "assistant", text: finalText },
+            { streamingText: "", reasoningText: "" }
+          );
+        } else {
+          this.update({ streamingText: "", reasoningText: "" });
+        }
         break;
       }
       case "tool/call": {
         const callId = String(data.callId ?? event.seq);
         const toolName = String(data.name ?? "tool");
         const detail = typeof data.arguments === "string" ? truncate(data.arguments) : "";
-        this.append({ id: `tool-${callId}`, kind: "tool", name: toolName, detail, status: "running" });
+        const item = {
+          id: `tool-${callId}`,
+          kind: "tool",
+          name: toolName,
+          detail,
+          status: "running"
+        };
+        this.update({ activeTools: [...this.state.activeTools, item] });
         break;
       }
       case "tool/result": {
-        const callId = String(data.callId ?? "");
+        const message = data.message;
+        const source = message?.source;
+        const callId = String(source?.callId ?? data.callId ?? "");
         const id = `tool-${callId}`;
-        const resultText = truncate(contentText(data.message));
+        const resultText = truncate(contentText(message));
         const failed = data.error !== void 0;
-        const items = this.state.items.map((item) => item.id === id && item.kind === "tool" ? { ...item, detail: resultText || item.detail, status: failed ? "error" : "done" } : item);
-        this.update({ items });
+        const pending = this.state.activeTools.find((item) => item.id === id);
+        if (pending === void 0) break;
+        const completed = {
+          id,
+          kind: "tool",
+          name: pending.name,
+          detail: resultText || pending.detail,
+          status: failed ? "error" : "done"
+        };
+        this.append(completed, {
+          activeTools: this.state.activeTools.filter((item) => item.id !== id)
+        });
         break;
       }
       case "turn/end": {
         const reason = data.reason;
+        const patch = { streamingText: "", reasoningText: "" };
         if (reason?.kind === "error") {
           const error = reason.error;
-          this.append({
-            id: `event-${event.seq}`,
-            kind: "system",
-            text: `Turn failed: ${String(error?.message ?? "unknown error")}`
-          });
+          this.append(
+            {
+              id: `event-${event.seq}`,
+              kind: "system",
+              text: `Turn failed: ${String(error?.message ?? "unknown error")}`
+            },
+            patch
+          );
+        } else {
+          this.update(patch);
         }
-        this.update({ streamingText: "", reasoningText: "" });
         break;
       }
     }
@@ -606,7 +663,7 @@ var HerdrBridge = class {
       ]);
     }
     const title = snapshot.title.trim().slice(0, 120);
-    if (title !== "" && title !== this.lastTitle) {
+    if (snapshot.sessionId !== void 0 && title !== "" && title !== this.lastTitle) {
       this.lastTitle = title;
       void this.enqueue([
         "pane",
@@ -649,7 +706,12 @@ var inject = [
   "userQuestions"
 ];
 function newestSessionForCwd(headers, cwd) {
-  return headers.filter((header) => header.cwd === cwd && header.origin !== "subagent").sort((left, right) => right.createdAt - left.createdAt)[0];
+  let newest;
+  for (const header of headers) {
+    if (header.cwd !== cwd || header.origin === "subagent") continue;
+    if (newest === void 0 || header.createdAt > newest.createdAt) newest = header;
+  }
+  return newest;
 }
 async function run(ctx, config) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -714,8 +776,8 @@ async function run(ctx, config) {
     setup
   });
   await handle.agent.whenIdle();
-  controller.bindAgent(handle.agent);
   controller.loadHistory(handle.agent.session.events);
+  controller.bindAgent(handle.agent);
   const disposeStatus = handle.agent.ctx.on("agent/status", ({ agent, status }) => {
     if (agent === handle?.agent) controller.setStatus(status);
   });
@@ -741,11 +803,9 @@ function apply(ctx, config) {
     appExit?.(1);
   });
 }
-var internals = { newestSessionForCwd };
 export {
   apply,
   inject,
-  internals,
   name
 };
 //# sourceMappingURL=index.js.map

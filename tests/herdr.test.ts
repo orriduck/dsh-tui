@@ -66,6 +66,19 @@ describe('Herdr bridge', () => {
     ])
   })
 
+  it('waits for a session identity before publishing placeholder metadata', async () => {
+    const commands: string[][] = []
+    const bridge = new HerdrBridge({
+      HERDR_ENV: '1',
+      HERDR_PANE_ID: 'w3:p6',
+      HERDR_SOCKET_PATH: '/tmp/herdr.sock',
+    }, async args => { commands.push(commandWithoutSequence(args)) })
+
+    await bridge.sync(snapshot())
+
+    expect(commands.some(command => command.includes('report-metadata'))).toBe(false)
+  })
+
   it('maps approvals and questions to blocked and suppresses duplicates', async () => {
     const commands: string[][] = []
     const bridge = new HerdrBridge({

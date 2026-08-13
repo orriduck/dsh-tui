@@ -44,6 +44,16 @@ describe('theme configuration', () => {
 
     expect(() => loadThemePreference({ DSH_HOME: dshHome })).toThrow('must be one of')
   })
+
+  it('lets a valid one-off environment override bypass an invalid config', () => {
+    const dshHome = temporaryDshHome()
+    writeFileSync(join(dshHome, 'tui.json'), '{"theme":"sepia"}\n')
+
+    expect(loadThemePreference({ DSH_HOME: dshHome, DSH_TUI_THEME: 'dark' })).toMatchObject({
+      preference: 'dark',
+      explicitEnvironment: true,
+    })
+  })
 })
 
 describe('automatic theme detection', () => {

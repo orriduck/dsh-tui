@@ -58,6 +58,10 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
         {(item) => <TranscriptRow key={item.id} item={item} palette={palette} />}
       </Static>
 
+      {state.activeTools.map(item => (
+        <TranscriptRow key={item.id} item={item} palette={palette} />
+      ))}
+
       {state.reasoningText === '' ? null : (
         <Box marginTop={1}><Text color={palette.muted}>thinking  {state.reasoningText}</Text></Box>
       )}

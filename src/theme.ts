@@ -3,15 +3,13 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
-export type ThemePreference = 'system' | 'light' | 'dark'
+type ThemePreference = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 export type ThemeSource = 'env' | 'config' | 'terminal' | 'system' | 'fallback'
 
-export interface ThemeResolution {
-  preference: ThemePreference
+interface ThemeResolution {
   resolved: ResolvedTheme
   source: ThemeSource
-  configPath: string
 }
 
 export interface ThemePalette {
@@ -71,6 +69,15 @@ export function loadThemePreference(env: NodeJS.ProcessEnv = process.env): {
     }
   }
 
+  const environment = env.DSH_TUI_THEME
+  if (environment !== undefined) {
+    return {
+      preference: parsePreference(environment, 'DSH_TUI_THEME'),
+      configPath,
+      explicitEnvironment: true,
+    }
+  }
+
   let document: unknown
   try {
     document = JSON.parse(readFileSync(configPath, 'utf8'))
@@ -81,10 +88,7 @@ export function loadThemePreference(env: NodeJS.ProcessEnv = process.env): {
     throw new Error(`theme config ${configPath} must contain a JSON object`)
   }
   const configured = parsePreference((document as Record<string, unknown>).theme ?? 'system', `${configPath}: theme`)
-  const environment = env.DSH_TUI_THEME
-  return environment === undefined
-    ? { preference: configured, configPath, explicitEnvironment: false }
-    : { preference: parsePreference(environment, 'DSH_TUI_THEME'), configPath, explicitEnvironment: true }
+  return { preference: configured, configPath, explicitEnvironment: false }
 }
 
 function normalizedChannel(hex: string): number | undefined {
@@ -123,7 +127,7 @@ export function parseOsc11Theme(response: string): ResolvedTheme | undefined {
   return relativeLuminance(...channels) >= 0.4 ? 'light' : 'dark'
 }
 
-export async function probeTerminalTheme(
+async function probeTerminalTheme(
   input: NodeJS.ReadStream = process.stdin,
   output: NodeJS.WriteStream = process.stdout,
   timeoutMs = 100,
@@ -165,7 +169,7 @@ export function colorFgBgTheme(value: string | undefined): ResolvedTheme | undef
   return background === 0 || (background >= 1 && background <= 6) || background === 8 ? 'dark' : 'light'
 }
 
-export function macOSSystemTheme(): ResolvedTheme | undefined {
+function macOSSystemTheme(): ResolvedTheme | undefined {
   if (process.platform !== 'darwin') return undefined
   const result = spawnSync('/usr/bin/defaults', ['read', '-g', 'AppleInterfaceStyle'], {
     encoding: 'utf8',
@@ -180,25 +184,21 @@ export async function resolveTheme(env: NodeJS.ProcessEnv = process.env): Promis
   const loaded = loadThemePreference(env)
   if (loaded.preference !== 'system') {
     return {
-      preference: loaded.preference,
       resolved: loaded.preference,
       source: loaded.explicitEnvironment ? 'env' : 'config',
-      configPath: loaded.configPath,
     }
   }
   const terminal = await probeTerminalTheme()
   if (terminal !== undefined) {
-    return { preference: 'system', resolved: terminal, source: 'terminal', configPath: loaded.configPath }
+    return { resolved: terminal, source: 'terminal' }
   }
   const colorEnvironment = colorFgBgTheme(env.COLORFGBG)
   if (colorEnvironment !== undefined) {
-    return { preference: 'system', resolved: colorEnvironment, source: 'terminal', configPath: loaded.configPath }
+    return { resolved: colorEnvironment, source: 'terminal' }
   }
   const system = macOSSystemTheme()
   return {
-    preference: 'system',
     resolved: system ?? 'dark',
     source: system === undefined ? 'fallback' : 'system',
-    configPath: loaded.configPath,
   }
 }

@@ -31,9 +31,12 @@ export interface Config {
 }
 
 function newestSessionForCwd(headers: readonly SessionHeader[], cwd: string): SessionHeader | undefined {
-  return headers
-    .filter(header => header.cwd === cwd && header.origin !== 'subagent')
-    .sort((left, right) => right.createdAt - left.createdAt)[0]
+  let newest: SessionHeader | undefined
+  for (const header of headers) {
+    if (header.cwd !== cwd || header.origin === 'subagent') continue
+    if (newest === undefined || header.createdAt > newest.createdAt) newest = header
+  }
+  return newest
 }
 
 async function run(ctx: Context, config: Config): Promise<void> {
@@ -106,8 +109,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
       })
 
   await handle.agent.whenIdle()
-  controller.bindAgent(handle.agent)
   controller.loadHistory(handle.agent.session.events)
+  controller.bindAgent(handle.agent)
 
   const disposeStatus = handle.agent.ctx.on('agent/status', ({ agent, status }) => {
     if (agent === handle?.agent) controller.setStatus(status)
@@ -136,5 +139,3 @@ export function apply(ctx: Context, config: Config): void {
     appExit?.(1)
   })
 }
-
-export const internals = { newestSessionForCwd }

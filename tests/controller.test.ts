@@ -54,11 +54,28 @@ describe('terminal projection', () => {
       name: 'bash',
       arguments: '{"cmd":"pwd"}',
     }))
+    expect(controller.snapshot().items).toEqual([])
+    expect(controller.snapshot().activeTools).toEqual([{
+      id: 'tool-call-1',
+      kind: 'tool',
+      name: 'bash',
+      detail: '{"cmd":"pwd"}',
+      status: 'running',
+    }])
+
     controller.ingest(event('tool/result', 2, {
-      callId: 'call-1',
-      message: { content: [{ content: [{ type: 'text', text: '/tmp/project' }] }] },
+      message: {
+        source: { kind: 'tool', callId: 'call-1' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-1',
+          isError: false,
+          content: [{ type: 'text', text: '/tmp/project' }],
+        }],
+      },
     }))
 
+    expect(controller.snapshot().activeTools).toEqual([])
     expect(controller.snapshot().items).toContainEqual({
       id: 'tool-call-1',
       kind: 'tool',
@@ -66,6 +83,27 @@ describe('terminal projection', () => {
       detail: '/tmp/project',
       status: 'done',
     })
+  })
+
+  it('projects a long restored history with one subscriber notification', () => {
+    const controller = new TuiController(async () => {})
+    let notifications = 0
+    controller.subscribe(() => { notifications += 1 })
+    const events = Array.from({ length: 1_000 }, (_, index) => event('user/message', index, {
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: `message ${index}` }],
+    }))
+
+    controller.loadHistory(events)
+
+    expect(controller.snapshot().items).toHaveLength(1_000)
+    expect(controller.snapshot().items.at(-1)).toEqual({
+      id: 'event-999',
+      kind: 'user',
+      text: 'message 999',
+    })
+    expect(notifications).toBe(1)
   })
 })
 
