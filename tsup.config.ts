@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     startup: 'src/startup.ts',
+    'session-commands': 'src/session-commands.ts',
     bin: 'src/bin.ts',
   },
   format: ['esm'],

@@ -1,6 +1,5 @@
 import React, { useRef, useState, useSyncExternalStore } from 'react'
-import { Box, Static, Text, useInput } from 'ink'
-import TextInput from 'ink-text-input'
+import { Box, Static, Text, useBoxMetrics, useCursor, useInput, type DOMElement } from 'ink'
 import type { TranscriptItem } from './controller.js'
 import {
   applyCompletion,
@@ -10,6 +9,11 @@ import {
   TuiController,
   permissionLabel,
 } from './controller.js'
+import {
+  composerCursorPosition,
+  editComposerInput,
+  type ComposerInputState,
+} from './composer-input.js'
 import type { ThemePalette } from './theme.js'
 import { themePalettes } from './theme.js'
 
@@ -36,7 +40,12 @@ function TranscriptRow({ item, palette }: { item: TranscriptItem; palette: Theme
 export function App({ controller }: { controller: TuiController }): React.JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot)
   const palette = themePalettes[state.theme]
-  const [value, setValue] = useState('')
+  const [inputState, setInputState] = useState<ComposerInputState>({ value: '', cursorOffset: 0 })
+  const inputStateRef = useRef(inputState)
+  const { value, cursorOffset } = inputState
+  const composerRef = useRef<DOMElement>(null)
+  const composerMetrics = useBoxMetrics(composerRef)
+  const { setCursorPosition } = useCursor()
   const completionCycle = useRef<{
     baseValue: string
     match: { start: number; end: number }
@@ -47,51 +56,68 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
 
   const prompt = state.interaction
 
+  const submit = (text: string): void => {
+    completionCycle.current = undefined
+    controller.submit(text)
+    const next = { value: '', cursorOffset: 0 }
+    inputStateRef.current = next
+    setInputState(next)
+  }
+
+  const replaceValue = (next: string): void => {
+    const state = { value: next, cursorOffset: next.length }
+    inputStateRef.current = state
+    setInputState(state)
+  }
+
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
       controller.cancelOrExit()
       return
     }
-    if (!key.tab || prompt !== undefined) return
-    const active = completionCycle.current
-    if (active !== undefined && active.renderedValue === value) {
-      const index = (active.index + 1) % active.candidates.length
-      const renderedValue = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? '')
-      completionCycle.current = { ...active, index, renderedValue }
-      setValue(renderedValue)
+    if (key.tab && prompt === undefined) {
+      const active = completionCycle.current
+      if (active !== undefined && active.renderedValue === value) {
+        const index = (active.index + 1) % active.candidates.length
+        const renderedValue = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? '')
+        completionCycle.current = { ...active, index, renderedValue }
+        replaceValue(renderedValue)
+        return
+      }
+      const match = completionCandidates(value, state.skills, state.commands)
+      if (match !== undefined) {
+        const renderedValue = applyCompletion(value, match, match.candidates[0] ?? '')
+        completionCycle.current = {
+          baseValue: value,
+          match,
+          candidates: match.candidates,
+          index: 0,
+          renderedValue,
+        }
+        replaceValue(renderedValue)
+      }
       return
     }
-    const match = completionCandidates(value, state.skills)
-    if (match === undefined) return
-    const renderedValue = applyCompletion(value, match, match.candidates[0] ?? '')
-    completionCycle.current = {
-      baseValue: value,
-      match,
-      candidates: match.candidates,
-      index: 0,
-      renderedValue,
+    if (key.tab) return
+    if (key.return) {
+      submit(inputStateRef.current.value)
+      return
     }
-    setValue(renderedValue)
+    if (key.upArrow || key.downArrow) return
+    completionCycle.current = undefined
+    const current = inputStateRef.current
+    const next = editComposerInput(current.value, current.cursorOffset, input, key)
+    inputStateRef.current = next
+    setInputState(next)
   })
-
-  const submit = (text: string): void => {
-    completionCycle.current = undefined
-    controller.submit(text)
-    setValue('')
-  }
-
-  const changeValue = (next: string): void => {
-    completionCycle.current = undefined
-    setValue(next)
-  }
 
   const activeCompletion = completionCycle.current?.renderedValue === value
     ? completionCycle.current
     : undefined
-  const pendingCompletion = prompt === undefined ? completionCandidates(value, state.skills) : undefined
+  const pendingCompletion = prompt === undefined ? completionCandidates(value, state.skills, state.commands) : undefined
   const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? []
   const selectedCompletion = activeCompletion?.candidates[activeCompletion.index]
-  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion)
+  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion, state.commands)
   const completionCommandWidth = completionMenu.length === 0
     ? 0
     : Math.min(28, Math.max(...completionMenu.map(option => option.command.length)) + 2)
@@ -100,6 +126,10 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
     : prompt.kind === 'approval' ? 'allow › '
     : prompt.kind === 'permission' || prompt.kind === 'permission-confirm' ? 'permission › '
     : 'answer › '
+
+  setCursorPosition(composerMetrics.hasMeasured
+    ? composerCursorPosition(composerMetrics, promptLabel, value, cursorOffset)
+    : undefined)
 
   const preset = state.permissionPreset
   const fullAccess = preset === 'danger-full-access'
@@ -127,28 +157,31 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
         <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor={palette.warning} paddingX={1}>
           <Text bold color={palette.warning}>{prompt.title}</Text>
           {prompt.detail === undefined ? null : <Text>{prompt.detail}</Text>}
-          <Text color={palette.muted}>{prompt.options.join('  ·  ')}{prompt.multiSelect === true ? '  (comma separated)' : ''}</Text>
+          {prompt.optionLayout === 'lines'
+            ? prompt.options.map(option => <Text key={option} color={palette.muted}>{option}</Text>)
+            : <Text color={palette.muted}>{prompt.options.join('  ·  ')}{prompt.multiSelect === true ? '  (comma separated)' : ''}</Text>}
         </Box>
       )}
 
       {state.notice === undefined ? null : <Text color={palette.muted}>{state.notice}</Text>}
       <Box
+        ref={composerRef}
         marginTop={1}
         flexDirection="column"
         backgroundColor={state.composerBackground ?? palette.composerBackground}
-        paddingX={1}
+        paddingRight={1}
         paddingY={1}
         width="100%"
       >
         <Box>
           <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
           <Box flexGrow={1}>
-            <TextInput value={value} onChange={changeValue} onSubmit={submit} />
+            <Text>{value}</Text>
           </Box>
         </Box>
       </Box>
       {prompt !== undefined || completionMenu.length === 0 ? null : (
-        <Box flexDirection="column" paddingLeft={promptLabel.length + 1} width="100%">
+        <Box flexDirection="column" paddingLeft={promptLabel.length} width="100%">
           {completionMenu.map(item => (
             <Box key={item.command} width="100%">
               <Box width={completionCommandWidth}>
@@ -171,7 +204,7 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
           ))}
         </Box>
       )}
-      <Box flexDirection="column" paddingLeft={1} width="100%">
+      <Box flexDirection="column" width="100%">
         <Text color={palette.muted}>
           {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
         </Text>

@@ -4,13 +4,20 @@ All notable changes to dsh-tui are documented here. `package.json` is the machin
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-13
+
+### Added
+
+- Built-in DSH `/sessions`, `/new`, and `/resume` commands, with a numbered current-workspace picker and exact session-id resume.
+- Safe launcher handoff that flushes the active session before restarting the TUI into a new or resumed session.
+- Per-session corruption isolation: unreadable saved logs remain visible in `/sessions` but cannot block or enter the `/resume` picker.
 
 ### Changed
 
 - Matched the Codex composer treatment: derive an opaque neutral tint from the terminal's exact OSC 11 background, keep the input surface near-full-width, and render compact status immediately below it.
 - Replaced the single-line slash preview with a Codex-style four-row command and skill menu, including descriptions and visible Tab selection.
-- Aligned the compact status with the composer's one-cell content inset.
+- Aligned the composer label, completion menu, and compact status to the transcript's root content axis.
+- Replaced the text input's painted fake cursor with Ink's real terminal cursor so macOS IME composition stays anchored inside the composer; consecutive key events now update from the latest controlled value.
 
 ## [0.4.1] - 2026-08-13
 
@@ -78,7 +85,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Initial same-process DeepSeek Harness TUI bundle.
 - Streaming text and reasoning, tool rows, approvals, questions, cancellation, status, and durable session continuation.
 
-[0.4.1]: https://github.com/orriduck/dsh-tui/compare/03ee02d...HEAD
+[0.5.0]: https://github.com/orriduck/dsh-tui/compare/9914fe7...HEAD
+[0.4.1]: https://github.com/orriduck/dsh-tui/compare/03ee02d...9914fe7
 [0.4.0]: https://github.com/orriduck/dsh-tui/compare/d69fd3f...03ee02d
 [0.3.1]: https://github.com/orriduck/dsh-tui/compare/06ceacd...d69fd3f
 [0.3.0]: https://github.com/orriduck/dsh-tui/compare/a1325b7...06ceacd

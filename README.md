@@ -54,8 +54,10 @@ dsh-tui -r <session-id>         # resume an exact session
 Inside the UI:
 
 - Enter sends a follow-up; while the agent is running, it steers the current turn.
+- The composer uses a real terminal cursor, keeping macOS IME composition and candidate UI anchored to the text insertion point.
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
-- `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
+- `/sessions` lists the 10 most recent sessions saved for the current directory. `/resume` opens a numbered picker, `/resume <session-id>` switches directly, and `/new` starts fresh. Session switches are idle-only and preserve the finished session before restarting the TUI. A corrupt saved log is marked unreadable instead of blocking the rest of the list, and is omitted from the resume picker.
+- `/status`, `/permission`, `/skills`, `/sessions`, `/new`, `/resume`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
 - A near-full-width neutral composer surface holds the input with one row of vertical breathing room. Like Codex, it probes the terminal background and paints an opaque RGB tint equivalent to 4% black on light terminals or 12% white on dark terminals; ANSI has no per-cell alpha. The compact status sits immediately below the surface and shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
 - `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills appear in a compact, described menu below the composer and offer Tab completion.
@@ -132,11 +134,11 @@ Included:
 - context-window usage and token totals
 - installed DSH version and an optional npm update hint
 - skill discovery, direct invocation visibility, and Tab completion
-- durable sessions and current-directory continuation
+- durable sessions, current-directory continuation, and in-TUI list/new/resume commands
 - one-command profile bootstrap
 - automatic Herdr lifecycle reporting when available
 
-Not included yet: split panes, remote persistence, a graphical session browser, image attachments, native Herdr launch/control, or Web-client parity. Herdr/tmux can own terminal persistence around this TUI if needed.
+Not included yet: split panes, remote persistence, a graphical cross-workspace session browser, image attachments, native Herdr launch/control, or Web-client parity. Herdr/tmux can own terminal persistence around this TUI if needed.
 
 ## Development
 

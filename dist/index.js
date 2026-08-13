@@ -9,8 +9,7 @@ import React2 from "react";
 
 // src/app.tsx
 import { useRef, useState, useSyncExternalStore } from "react";
-import { Box, Static, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
+import { Box, Static, Text, useBoxMetrics, useCursor, useInput } from "ink";
 
 // src/controller.ts
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
@@ -116,14 +115,16 @@ var BUILTIN_COMMANDS = [
   { name: "permission", description: "change sandbox and approval settings" },
   { name: "skills", description: "list available skills" }
 ];
-function completionCandidates(input, skills) {
+function completionCandidates(input, skills, commands = []) {
   const match = /(?:^|\s)(\/[a-z0-9-]*)$/.exec(input);
   const token = match?.[1];
   if (token === void 0) return void 0;
   const builtIns = BUILTIN_COMMANDS.map((command) => `/${command.name}`).filter((candidate) => candidate.startsWith(token)).sort((left, right) => left.localeCompare(right));
   const builtInSet = new Set(BUILTIN_COMMANDS.map((command) => `/${command.name}`));
-  const skillCandidates = [...new Set(skills.map((skill) => `/${skill.name}`))].filter((candidate) => candidate.startsWith(token) && !builtInSet.has(candidate)).sort((left, right) => left.localeCompare(right));
-  const candidates = [...builtIns, ...skillCandidates];
+  const commandCandidates = [...new Set(commands.map((command) => `/${command.name}`))].filter((candidate) => candidate.startsWith(token) && !builtInSet.has(candidate)).sort((left, right) => left.localeCompare(right));
+  const commandSet = new Set(commandCandidates);
+  const skillCandidates = [...new Set(skills.map((skill) => `/${skill.name}`))].filter((candidate) => candidate.startsWith(token) && !builtInSet.has(candidate) && !commandSet.has(candidate)).sort((left, right) => left.localeCompare(right));
+  const candidates = [...builtIns, ...commandCandidates, ...skillCandidates];
   if (candidates.length === 0) return void 0;
   return {
     start: input.length - token.length,
@@ -131,7 +132,7 @@ function completionCandidates(input, skills) {
     candidates
   };
 }
-function completionMenuItems(candidates, skills, selected, maxItems = 4) {
+function completionMenuItems(candidates, skills, selected, commands = [], maxItems = 4) {
   const active = selected ?? candidates[0];
   const ordered = active === void 0 ? [...candidates] : [active, ...candidates.filter((candidate) => candidate !== active)];
   const builtInDescriptions = new Map(BUILTIN_COMMANDS.map((command) => [
@@ -139,8 +140,9 @@ function completionMenuItems(candidates, skills, selected, maxItems = 4) {
     command.description
   ]));
   const skillDescriptions = new Map(skills.map((skill) => [`/${skill.name}`, skill.description]));
+  const commandDescriptions = new Map(commands.map((command) => [`/${command.name}`, command.description]));
   return ordered.slice(0, Math.max(0, maxItems)).map((command) => {
-    const description = builtInDescriptions.get(command) ?? skillDescriptions.get(command) ?? "load this skill";
+    const description = builtInDescriptions.get(command) ?? commandDescriptions.get(command) ?? skillDescriptions.get(command) ?? "load this skill";
     return {
       command,
       description: truncate(description),
@@ -177,6 +179,7 @@ var TuiController = class {
     usage: EMPTY_USAGE,
     contextWindow: void 0,
     skills: [],
+    commands: [],
     dshVersion: void 0,
     dshUpgrade: void 0
   };
@@ -213,10 +216,16 @@ var TuiController = class {
   }
   bindAgent(agent) {
     this.agent = agent;
+    const commands = this.deps.commands?.list?.(agent).map((command) => ({
+      name: command.name,
+      description: command.description,
+      ...command.input === void 0 ? {} : { inputHint: command.input.hint }
+    })) ?? [];
     this.update({
       sessionId: agent.id,
       model: [agent.options.provider, agent.options.model].filter(Boolean).join("/"),
-      status: agent.status
+      status: agent.status,
+      commands
     });
   }
   setStatus(status) {
@@ -414,7 +423,7 @@ var TuiController = class {
       this.append({
         id: `help-${Date.now()}`,
         kind: "system",
-        text: "/help  /status  /permission  /skills  /cancel  /quit \xB7 use /skill-name to load a skill \xB7 plugin tools appear as tool rows \xB7 Enter while running steers \xB7 Ctrl+C cancels, then exits when idle"
+        text: "/help  /status  /permission  /skills  /sessions  /new  /resume  /cancel  /quit \xB7 use /skill-name to load a skill \xB7 plugin tools appear as tool rows \xB7 Enter while running steers \xB7 Ctrl+C cancels, then exits when idle"
       });
       return;
     }
@@ -439,6 +448,13 @@ var TuiController = class {
       void this.skillsCommand();
       return;
     }
+    if (text.startsWith("/") && this.deps.commands !== void 0) {
+      void this.pluginCommand(text);
+      return;
+    }
+    this.submitMessage(text);
+  }
+  submitMessage(text) {
     if (this.agent === void 0) return;
     const message = createUserMessage({
       content: [{ type: "text", text }],
@@ -447,6 +463,51 @@ var TuiController = class {
     if (this.agent.status === "running") this.agent.steer(message);
     else this.agent.followup(message);
     this.update({ notice: void 0 });
+  }
+  async pluginCommand(text) {
+    if (this.agent === void 0 || this.deps.commands === void 0) return;
+    const agent = this.agent;
+    try {
+      const execution = await this.deps.commands.execute(agent, text, new AbortController().signal);
+      if (execution === void 0) {
+        this.submitMessage(text);
+        return;
+      }
+      const result = execution.result;
+      if (result.text !== void 0) {
+        this.append({
+          id: `command-${Date.now()}`,
+          kind: "system",
+          text: result.text
+        });
+      }
+      const request = this.deps.sessionCommands?.take(agent);
+      if (request?.kind === "pick") await this.sessionPicker(request.sessions);
+      else if (request !== void 0) await this.deps.sessionCommands?.restart(request);
+    } catch (error) {
+      this.update({ notice: `command failed: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+  async sessionPicker(sessions) {
+    const answer = normalizeAnswer(await this.askForInput({
+      kind: "session",
+      title: "Resume session",
+      optionLayout: "lines",
+      options: [
+        ...sessions.map((session2, index2) => `${index2 + 1} ${session2.title} \u2014 ${session2.id}`),
+        "c cancel"
+      ]
+    }));
+    if (answer === "__cancelled__" || answer === "c" || answer === "cancel") return;
+    const index = Number.parseInt(answer, 10);
+    const byNumber = Number.isSafeInteger(index) ? sessions[index - 1] : void 0;
+    const byId = sessions.find((session2) => session2.id === answer);
+    const session = byNumber ?? byId;
+    if (session === void 0) {
+      this.update({ notice: `unknown session choice "${answer}"` });
+      return;
+    }
+    await this.deps.sessionCommands?.restart({ kind: "resume", id: session.id });
   }
   cancel() {
     if (this.agent?.status === "running") {
@@ -634,6 +695,33 @@ var TuiController = class {
     return selected.length > 0 ? { id: question.id, selected } : { id: question.id, selected: [], custom: raw.trim() };
   }
 };
+
+// src/composer-input.ts
+import stringWidth from "string-width";
+function composerCursorPosition(composer, prompt, value, cursorOffset) {
+  const beforeCursor = value.slice(0, Math.max(0, Math.min(cursorOffset, value.length)));
+  return {
+    x: composer.left + stringWidth(prompt + beforeCursor),
+    y: composer.top + 1
+  };
+}
+function editComposerInput(value, cursorOffset, input, key) {
+  const offset = Math.max(0, Math.min(cursorOffset, value.length));
+  if (key.leftArrow === true) return { value, cursorOffset: Math.max(0, offset - 1) };
+  if (key.rightArrow === true) return { value, cursorOffset: Math.min(value.length, offset + 1) };
+  if (key.backspace === true || key.delete === true) {
+    if (offset === 0) return { value, cursorOffset: 0 };
+    return {
+      value: value.slice(0, offset - 1) + value.slice(offset),
+      cursorOffset: offset - 1
+    };
+  }
+  if (input === "") return { value, cursorOffset: offset };
+  return {
+    value: value.slice(0, offset) + input + value.slice(offset),
+    cursorOffset: offset + input.length
+  };
+}
 
 // src/theme.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -853,51 +941,74 @@ function TranscriptRow({ item, palette }) {
 function App({ controller }) {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot);
   const palette = themePalettes[state.theme];
-  const [value, setValue] = useState("");
+  const [inputState, setInputState] = useState({ value: "", cursorOffset: 0 });
+  const inputStateRef = useRef(inputState);
+  const { value, cursorOffset } = inputState;
+  const composerRef = useRef(null);
+  const composerMetrics = useBoxMetrics(composerRef);
+  const { setCursorPosition } = useCursor();
   const completionCycle = useRef(void 0);
   const prompt = state.interaction;
+  const submit = (text) => {
+    completionCycle.current = void 0;
+    controller.submit(text);
+    const next = { value: "", cursorOffset: 0 };
+    inputStateRef.current = next;
+    setInputState(next);
+  };
+  const replaceValue = (next) => {
+    const state2 = { value: next, cursorOffset: next.length };
+    inputStateRef.current = state2;
+    setInputState(state2);
+  };
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
       controller.cancelOrExit();
       return;
     }
-    if (!key.tab || prompt !== void 0) return;
-    const active = completionCycle.current;
-    if (active !== void 0 && active.renderedValue === value) {
-      const index = (active.index + 1) % active.candidates.length;
-      const renderedValue2 = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? "");
-      completionCycle.current = { ...active, index, renderedValue: renderedValue2 };
-      setValue(renderedValue2);
+    if (key.tab && prompt === void 0) {
+      const active = completionCycle.current;
+      if (active !== void 0 && active.renderedValue === value) {
+        const index = (active.index + 1) % active.candidates.length;
+        const renderedValue = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? "");
+        completionCycle.current = { ...active, index, renderedValue };
+        replaceValue(renderedValue);
+        return;
+      }
+      const match = completionCandidates(value, state.skills, state.commands);
+      if (match !== void 0) {
+        const renderedValue = applyCompletion(value, match, match.candidates[0] ?? "");
+        completionCycle.current = {
+          baseValue: value,
+          match,
+          candidates: match.candidates,
+          index: 0,
+          renderedValue
+        };
+        replaceValue(renderedValue);
+      }
       return;
     }
-    const match = completionCandidates(value, state.skills);
-    if (match === void 0) return;
-    const renderedValue = applyCompletion(value, match, match.candidates[0] ?? "");
-    completionCycle.current = {
-      baseValue: value,
-      match,
-      candidates: match.candidates,
-      index: 0,
-      renderedValue
-    };
-    setValue(renderedValue);
+    if (key.tab) return;
+    if (key.return) {
+      submit(inputStateRef.current.value);
+      return;
+    }
+    if (key.upArrow || key.downArrow) return;
+    completionCycle.current = void 0;
+    const current = inputStateRef.current;
+    const next = editComposerInput(current.value, current.cursorOffset, input, key);
+    inputStateRef.current = next;
+    setInputState(next);
   });
-  const submit = (text) => {
-    completionCycle.current = void 0;
-    controller.submit(text);
-    setValue("");
-  };
-  const changeValue = (next) => {
-    completionCycle.current = void 0;
-    setValue(next);
-  };
   const activeCompletion = completionCycle.current?.renderedValue === value ? completionCycle.current : void 0;
-  const pendingCompletion = prompt === void 0 ? completionCandidates(value, state.skills) : void 0;
+  const pendingCompletion = prompt === void 0 ? completionCandidates(value, state.skills, state.commands) : void 0;
   const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? [];
   const selectedCompletion = activeCompletion?.candidates[activeCompletion.index];
-  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion);
+  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion, state.commands);
   const completionCommandWidth = completionMenu.length === 0 ? 0 : Math.min(28, Math.max(...completionMenu.map((option) => option.command.length)) + 2);
   const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : prompt.kind === "permission" || prompt.kind === "permission-confirm" ? "permission \u203A " : "answer \u203A ";
+  setCursorPosition(composerMetrics.hasMeasured ? composerCursorPosition(composerMetrics, promptLabel, value, cursorOffset) : void 0);
   const preset = state.permissionPreset;
   const fullAccess = preset === "danger-full-access";
   const showPermission = preset !== "default" && preset !== "workspace-write";
@@ -916,7 +1027,7 @@ function App({ controller }) {
     prompt === void 0 ? null : /* @__PURE__ */ jsxs(Box, { marginTop: 1, flexDirection: "column", borderStyle: "single", borderColor: palette.warning, paddingX: 1, children: [
       /* @__PURE__ */ jsx(Text, { bold: true, color: palette.warning, children: prompt.title }),
       prompt.detail === void 0 ? null : /* @__PURE__ */ jsx(Text, { children: prompt.detail }),
-      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+      prompt.optionLayout === "lines" ? prompt.options.map((option) => /* @__PURE__ */ jsx(Text, { color: palette.muted, children: option }, option)) : /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
         prompt.options.join("  \xB7  "),
         prompt.multiSelect === true ? "  (comma separated)" : ""
       ] })
@@ -925,19 +1036,20 @@ function App({ controller }) {
     /* @__PURE__ */ jsx(
       Box,
       {
+        ref: composerRef,
         marginTop: 1,
         flexDirection: "column",
         backgroundColor: state.composerBackground ?? palette.composerBackground,
-        paddingX: 1,
+        paddingRight: 1,
         paddingY: 1,
         width: "100%",
         children: /* @__PURE__ */ jsxs(Box, { children: [
           /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
-          /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
+          /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(Text, { children: value }) })
         ] })
       }
     ),
-    prompt !== void 0 || completionMenu.length === 0 ? null : /* @__PURE__ */ jsx(Box, { flexDirection: "column", paddingLeft: promptLabel.length + 1, width: "100%", children: completionMenu.map((item) => /* @__PURE__ */ jsxs(Box, { width: "100%", children: [
+    prompt !== void 0 || completionMenu.length === 0 ? null : /* @__PURE__ */ jsx(Box, { flexDirection: "column", paddingLeft: promptLabel.length, width: "100%", children: completionMenu.map((item) => /* @__PURE__ */ jsxs(Box, { width: "100%", children: [
       /* @__PURE__ */ jsx(Box, { width: completionCommandWidth, children: item.selected ? /* @__PURE__ */ jsx(
         Text,
         {
@@ -949,7 +1061,7 @@ function App({ controller }) {
       ) : /* @__PURE__ */ jsx(Text, { wrap: "truncate-end", children: item.command }) }),
       /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(Text, { color: item.selected ? palette.user : palette.muted, wrap: "truncate-end", children: item.description }) })
     ] }, item.command)) }),
-    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", paddingLeft: 1, width: "100%", children: [
+    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", width: "100%", children: [
       /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
         model,
         " \xB7 ",
@@ -1177,6 +1289,7 @@ var inject = [
   "agents",
   "sessions",
   "sessionPersistence",
+  "dshTuiSessionCommands",
   "userQuestions"
 ];
 function newestSessionForCwd(headers, cwd) {
@@ -1197,17 +1310,18 @@ async function run(ctx, config) {
   const defaultModel = ctx.get("agentDefaultModel");
   const sessions = ctx.get("sessions");
   const persistence = ctx.get("sessionPersistence");
+  const sessionCommands = ctx.get("dshTuiSessionCommands");
   const userQuestions = ctx.get("userQuestions");
   const skills = ctx.get("skills");
   const llm = ctx.get("llm");
   const appExit = ctx.get("appExit");
-  if (agents === void 0 || defaultModel === void 0 || sessions === void 0 || persistence === void 0 || userQuestions === void 0 || appExit === void 0) return;
+  if (agents === void 0 || defaultModel === void 0 || sessions === void 0 || persistence === void 0 || sessionCommands === void 0 || userQuestions === void 0 || appExit === void 0) return;
   let ink;
   let handle;
   const herdr = new HerdrBridge();
   const permissionPresets = ctx.get("permissionPresets");
   const commands = ctx.get("commands");
-  const controller = new TuiController(async () => {
+  const shutdown = async () => {
     if (handle !== void 0) {
       if (handle.agent.status === "running") handle.agent.cancel({ kind: "user" });
       await handle.agent.whenIdle();
@@ -1216,10 +1330,22 @@ async function run(ctx, config) {
     ink?.unmount();
     await herdr.dispose();
     appExit(0);
-  }, {
+  };
+  const restart = async (request) => {
+    if (process.send === void 0) throw new Error("session switching requires the dsh-tui launcher");
+    await new Promise((resolve, reject) => {
+      process.send?.({ type: "dsh-tui/restart", request }, (error) => {
+        if (error === null) resolve();
+        else reject(error);
+      });
+    });
+    await shutdown();
+  };
+  const controller = new TuiController(shutdown, {
     ...permissionPresets === void 0 ? {} : { permissionPresets: { names: permissionPresets.names } },
     ...commands === void 0 ? {} : {
       commands: {
+        list: (agent) => commands.list(agent),
         execute: (agent, line, signal) => commands.execute(agent, line, signal)
       }
     },
@@ -1235,6 +1361,10 @@ async function run(ctx, config) {
           return summaries.filter((skill) => skill.invocation.userInvocable).map((skill) => ({ name: skill.name, description: skill.description }));
         }
       }
+    },
+    sessionCommands: {
+      take: (agent) => sessionCommands.take(agent),
+      restart
     }
   });
   controller.setTheme(theme);

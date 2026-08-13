@@ -277,6 +277,10 @@ describe('input helpers', () => {
     expect(match === undefined ? undefined : applyCompletion('please use /s', match, '/status-helper'))
       .toBe('please use /status-helper')
     expect(completionCandidates('/skill already', [])).toBeUndefined()
+    expect(completionCandidates('/r', [], [
+      { name: 'resume', description: 'Resume a recent or exact session' },
+      { name: 'sessions', description: 'List recent sessions for this workspace' },
+    ])?.candidates).toEqual(['/resume'])
 
     expect(completionMenuItems(
       ['/skills', '/status', '/shadow-mode', '/systematic-debugging', '/sites'],
@@ -286,6 +290,7 @@ describe('input helpers', () => {
         { name: 'sites', description: 'Build a site.' },
       ],
       '/systematic-debugging',
+      [],
     )).toEqual([
       { command: '/systematic-debugging', description: 'Debug methodically.', selected: true },
       { command: '/skills', description: 'list available skills', selected: false },
@@ -496,5 +501,88 @@ describe('skills command', () => {
     expect(last.text).toContain('skills 1')
     expect(last.text).toContain('dsh 0.1.0-rc.6')
     expect(last.text).toContain('update 0.1.0-rc.7: npm install -g @deepseek-ai/dsh@0.1.0-rc.7')
+  })
+})
+
+describe('plugin commands', () => {
+  it('includes built-in session commands in /help', () => {
+    const controller = new TuiController(async () => {})
+    controller.bindAgent(idleAgent())
+
+    controller.submit('/help')
+
+    expect(controller.snapshot().items.at(-1)).toMatchObject({
+      kind: 'system',
+      text: expect.stringContaining('/sessions  /new  /resume'),
+    })
+  })
+
+  it('discovers and executes registered DSH commands without sending them to the model', async () => {
+    const execute = vi.fn(async () => ({
+      commandId: 'cmd-test-1',
+      result: { kind: 'success', text: 'Recent sessions for this workspace:\nsession-one' },
+    }))
+    const controller = new TuiController(async () => {}, {
+      commands: {
+        list: () => [{ name: 'sessions', description: 'List recent sessions for this workspace' }],
+        execute,
+      },
+    } as never)
+    const followup = vi.fn()
+    const agent = { ...idleAgent(), followup } as unknown as Agent
+    controller.bindAgent(agent)
+
+    expect((controller.snapshot() as unknown as { commands?: unknown }).commands).toEqual([
+      { name: 'sessions', description: 'List recent sessions for this workspace' },
+    ])
+    controller.submit('/sessions')
+    await flush()
+
+    expect(execute).toHaveBeenCalledWith(agent, '/sessions', expect.any(AbortSignal))
+    expect(followup).not.toHaveBeenCalled()
+    expect(controller.snapshot().items.at(-1)).toEqual({
+      id: expect.stringMatching(/^command-/),
+      kind: 'system',
+      text: 'Recent sessions for this workspace:\nsession-one',
+    })
+  })
+
+  it('turns a bare /resume request into a numbered session picker and restart', async () => {
+    const restart = vi.fn(async () => {})
+    let pending: unknown = {
+      kind: 'pick',
+      sessions: [
+        { id: 'session-two', title: 'Second task', createdAt: Date.UTC(2026, 7, 13, 18, 30), current: false },
+        { id: 'session-one', title: 'First task', createdAt: Date.UTC(2026, 7, 12, 9, 5), current: false },
+      ],
+    }
+    const controller = new TuiController(async () => {}, {
+      commands: {
+        list: () => [{ name: 'resume', description: 'Resume a recent or exact session' }],
+        execute: async () => ({ commandId: 'cmd-test-2', result: { kind: 'success' } }),
+      },
+      sessionCommands: {
+        take: () => {
+          const request = pending
+          pending = undefined
+          return request
+        },
+        restart,
+      },
+    } as never)
+    controller.bindAgent(idleAgent())
+
+    controller.submit('/resume')
+    await flush()
+    expect(controller.snapshot().interaction).toMatchObject({
+      kind: 'session',
+      title: 'Resume session',
+      optionLayout: 'lines',
+      options: ['1 Second task — session-two', '2 First task — session-one', 'c cancel'],
+    })
+
+    controller.submit('2')
+    await flush()
+    expect(restart).toHaveBeenCalledWith({ kind: 'resume', id: 'session-one' })
   })
 })

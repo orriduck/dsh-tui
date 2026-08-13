@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseRestartMessage, restartArgs, type RestartRequest } from './restart.js'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -40,19 +41,32 @@ if (!profileHasTui()) {
   if (install.status !== 0) process.exit(install.status ?? 1)
 }
 
-const child = spawn('dsh', ['--profile', 'tui', ...process.argv.slice(2)], {
-  stdio: 'inherit',
-  env: process.env,
-})
+function launch(args: string[]): void {
+  let restart: RestartRequest | undefined
+  const child = spawn('dsh', ['--profile', 'tui', ...args], {
+    stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+    env: process.env,
+  })
 
-child.on('error', (error) => {
-  process.stderr.write(`dsh-tui: could not run dsh: ${error.message}\n`)
-  process.exitCode = 127
-})
-child.on('exit', (code, signal) => {
-  if (signal !== null) {
-    process.kill(process.pid, signal)
-    return
-  }
-  process.exitCode = code ?? 1
-})
+  child.on('message', (message) => {
+    restart ??= parseRestartMessage(message)
+  })
+  child.on('error', (error) => {
+    process.stderr.write(`dsh-tui: could not run dsh: ${error.message}\n`)
+    process.exitCode = 127
+  })
+  child.on('exit', (code, signal) => {
+    if (signal !== null) {
+      process.kill(process.pid, signal)
+      return
+    }
+    if (restart !== undefined && code === 0) {
+      process.stdout.write('\u001B[2J\u001B[H')
+      launch(restartArgs(restart))
+      return
+    }
+    process.exitCode = code ?? 1
+  })
+}
+
+launch(process.argv.slice(2))

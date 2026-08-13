@@ -17,12 +17,12 @@ importers:
       ink:
         specifier: ^7.1.1
         version: 7.1.1(@types/react@19.2.18)(react@19.2.8)
-      ink-text-input:
-        specifier: ^6.0.0
-        version: 6.0.0(ink@7.1.1(@types/react@19.2.18)(react@19.2.8))(react@19.2.8)
       react:
         specifier: ^19.2.0
         version: 19.2.8
+      string-width:
+        specifier: ^8.2.0
+        version: 8.2.2
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.1
@@ -69,6 +69,9 @@ importers:
       '@types/react':
         specifier: ^19.2.0
         version: 19.2.18
+      ink-testing-library:
+        specifier: ^4.0.0
+        version: 4.0.0(@types/react@19.2.18)
       tsup:
         specifier: ^8.5.0
         version: 8.5.1(postcss@8.5.26)(typescript@5.9.3)
@@ -1004,12 +1007,14 @@ packages:
     resolution: {integrity: sha512-m6FAo/spmsW2Ab2fU35JTYwtOKa2yAwXSwgjSv1TJzh4Mh7mC3lzAOVLBprb72XsTrgkEIsl7YrFNAiDiRhIGg==}
     engines: {node: '>=12'}
 
-  ink-text-input@6.0.0:
-    resolution: {integrity: sha512-Fw64n7Yha5deb1rHY137zHTAbSTNelUKuB5Kkk2HACXEtwIHBCf9OH2tP/LQ9fRYTl1F0dZgbW0zPnZk6FA9Lw==}
+  ink-testing-library@4.0.0:
+    resolution: {integrity: sha512-yF92kj3pmBvk7oKbSq5vEALO//o7Z9Ck/OaLNlkzXNeYdwfpxMQkSowGTFUCS5MSu9bWfSZMewGpp7bFc66D7Q==}
     engines: {node: '>=18'}
     peerDependencies:
-      ink: '>=5'
-      react: '>=18'
+      '@types/react': '>=18.0.0'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
 
   ink@7.1.1:
     resolution: {integrity: sha512-Y43xxa1ZSPvpmfLHcN5o+OdP8Rf8ykkNJEuKYOUNZKT8wXVNLFTtEm1nSDMQkfBH+YANF4Xuu0hhZ4ejqAtN2w==}
@@ -1266,10 +1271,6 @@ packages:
         optional: true
       typescript:
         optional: true
-
-  type-fest@4.41.0:
-    resolution: {integrity: sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA==}
-    engines: {node: '>=16'}
 
   type-fest@5.8.0:
     resolution: {integrity: sha512-YGYEVz3Fm5iy/AybuA0oyNFq7H4CgQNfRp/qfe8nurE1kuCeNm3/vfm9X4Mtl+qLyaKJUh5xrFZwogr41SMjYA==}
@@ -2099,12 +2100,9 @@ snapshots:
 
   indent-string@5.0.0: {}
 
-  ink-text-input@6.0.0(ink@7.1.1(@types/react@19.2.18)(react@19.2.8))(react@19.2.8):
-    dependencies:
-      chalk: 5.6.2
-      ink: 7.1.1(@types/react@19.2.18)(react@19.2.8)
-      react: 19.2.8
-      type-fest: 4.41.0
+  ink-testing-library@4.0.0(@types/react@19.2.18):
+    optionalDependencies:
+      '@types/react': 19.2.18
 
   ink@7.1.1(@types/react@19.2.18)(react@19.2.8):
     dependencies:
@@ -2369,8 +2367,6 @@ snapshots:
       - supports-color
       - tsx
       - yaml
-
-  type-fest@4.41.0: {}
 
   type-fest@5.8.0:
     dependencies:

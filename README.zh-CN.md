@@ -54,8 +54,10 @@ dsh-tui -r <session-id>         # 恢复指定会话
 界面操作：
 
 - Enter 发送后续消息；agent 运行中输入会 steer 当前 turn。
+- Composer 使用终端真实光标，让 macOS 输入法的拼音预编辑和候选窗口跟随文本插入位置。
 - `Ctrl+C` 在运行中取消 turn，idle 时保存并退出。
-- 内置 `/status`、`/permission`、`/skills`、`/cancel`、`/help`、`/quit` 和 `/exit`。
+- `/sessions` 列出当前目录最近保存的 10 个会话；`/resume` 打开编号选择器，`/resume <session-id>` 直接切换，`/new` 新建会话。切换只能在 idle 时进行，TUI 重启前会先完整保存当前会话。损坏的历史日志会标为 unreadable，不会阻断其余列表，也不会进入恢复选择器。
+- 内置 `/status`、`/permission`、`/skills`、`/sessions`、`/new`、`/resume`、`/cancel`、`/help`、`/quit` 和 `/exit`。
 - 工具调用、reasoning、审批和 `ask_user_question` 都直接显示在终端里。
 - 几乎占满终端宽度的连续中性 composer 收纳输入，并在上下各留一行呼吸空间。与 Codex 一样，它会探测终端实际背景，并在浅色背景上混入 4% 黑色、深色背景上混入 12% 白色，再绘制为不透明 RGB；ANSI 本身没有逐单元格 alpha。紧凑状态栏紧贴在面板下方，显示模型状态、已安装 DSH 版本和累计 context 用量，不重复默认 workspace sandbox。非默认权限仍会显示，Full Access 会重点警示。`/permission` 通过 DSH 官方命令切换当前会话权限；只能在 idle 时切换，Full Access 还必须输入 `FULL ACCESS` 确认。
 - `/skills` 列出用户可调用的 skills。输入 `/skill-name` 可直接加载；slash command 和 skill catalog 会在 composer 下方显示带说明的紧凑菜单，并支持 Tab 补全。
@@ -132,11 +134,11 @@ DSH 默认权限 preset 是带交互审批的 `workspace-write`。TUI 接入 DSH
 - context window 用量和 token totals
 - 已安装 DSH 版本与可选 npm 更新提示
 - skill 发现、直接调用可见性和 Tab 补全
-- 持久会话与按当前目录继续
+- 持久会话、按当前目录继续，以及 TUI 内的 list/new/resume 命令
 - 一条命令完成 profile 初始化
 - 在 Herdr 环境中的自动生命周期上报
 
-暂不包含：split panes、远端持久化、图形化 session browser、图片附件、原生 Herdr 启动/控制或 Web client 全量功能。终端持久化可继续交给 Herdr/tmux。
+暂不包含：split panes、远端持久化、跨 workspace 的图形化 session browser、图片附件、原生 Herdr 启动/控制或 Web client 全量功能。终端持久化可继续交给 Herdr/tmux。
 
 ## 开发
 

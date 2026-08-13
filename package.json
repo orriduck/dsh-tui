@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A small, session-aware terminal UI for DeepSeek Harness",
   "type": "module",
   "bin": {
@@ -16,6 +16,10 @@
     "./startup": {
       "types": "./dist/startup.d.ts",
       "default": "./dist/startup.js"
+    },
+    "./session-commands": {
+      "types": "./dist/session-commands.d.ts",
+      "default": "./dist/session-commands.js"
     },
     "./package.json": "./package.json"
   },
@@ -58,8 +62,8 @@
   "dependencies": {
     "commander": "^15.0.0",
     "ink": "^7.1.1",
-    "ink-text-input": "^6.0.0",
     "react": "^19.2.0",
+    "string-width": "^8.2.0",
     "@deepseek-ai/dsh-tool-ask-user": "0.1.0-rc.6"
   },
   "peerDependencies": {
@@ -108,6 +112,7 @@
     "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
     "@types/node": "^22.19.0",
     "@types/react": "^19.2.0",
+    "ink-testing-library": "^4.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

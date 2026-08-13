@@ -1,4 +1,5 @@
 import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
+import type { CommandDescriptor, CommandExecution } from '@deepseek-ai/dsh-commands'
 import { createUserMessage, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import { applyKnobEvent, type KnobState } from '@deepseek-ai/dsh-permission-presets'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -10,6 +11,7 @@ import type {
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type { ResolvedTheme, ThemeResolution, ThemeSource } from './theme.js'
+import type { SessionSummary, SessionSwitchRequest } from './session-commands.js'
 
 type ToolTranscriptItem = {
   id: string
@@ -39,16 +41,27 @@ export interface SkillEntry {
   description: string
 }
 
+export interface CommandEntry {
+  name: string
+  description: string
+  inputHint?: string
+}
+
 /** Optional host services used by command surfaces; absent services degrade gracefully. */
 export interface ControllerDeps {
   permissionPresets?: {
     names: readonly string[]
   }
   commands?: {
-    execute: (agent: Agent, line: string, signal: AbortSignal) => Promise<unknown>
+    list?: (agent: Agent) => readonly CommandDescriptor[]
+    execute: (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
   }
   skills?: {
     list: (signal: AbortSignal) => Promise<SkillEntry[]>
+  }
+  sessionCommands?: {
+    take: (agent: Agent) => SessionSwitchRequest | undefined
+    restart: (request: Exclude<SessionSwitchRequest, { kind: 'pick' }>) => Promise<void>
   }
 }
 
@@ -78,10 +91,11 @@ export type TranscriptItem =
   | ToolTranscriptItem
 
 interface InteractionPrompt {
-  kind: 'approval' | 'question' | 'permission' | 'permission-confirm'
+  kind: 'approval' | 'question' | 'permission' | 'permission-confirm' | 'session'
   title: string
   detail?: string
   options: string[]
+  optionLayout?: 'inline' | 'lines'
   multiSelect?: boolean
 }
 
@@ -105,6 +119,7 @@ interface TuiState {
   usage: UsageState
   contextWindow: number | undefined
   skills: SkillEntry[]
+  commands: CommandEntry[]
   dshVersion: string | undefined
   dshUpgrade: { version: string; command: string } | undefined
 }
@@ -218,6 +233,7 @@ interface CompletionMatch {
 export function completionCandidates(
   input: string,
   skills: readonly Pick<SkillEntry, 'name'>[],
+  commands: readonly CommandEntry[] = [],
 ): CompletionMatch | undefined {
   const match = /(?:^|\s)(\/[a-z0-9-]*)$/.exec(input)
   const token = match?.[1]
@@ -227,10 +243,14 @@ export function completionCandidates(
     .filter(candidate => candidate.startsWith(token))
     .sort((left, right) => left.localeCompare(right))
   const builtInSet: ReadonlySet<string> = new Set(BUILTIN_COMMANDS.map(command => `/${command.name}`))
-  const skillCandidates = [...new Set(skills.map(skill => `/${skill.name}`))]
+  const commandCandidates = [...new Set(commands.map(command => `/${command.name}`))]
     .filter(candidate => candidate.startsWith(token) && !builtInSet.has(candidate))
     .sort((left, right) => left.localeCompare(right))
-  const candidates = [...builtIns, ...skillCandidates]
+  const commandSet: ReadonlySet<string> = new Set(commandCandidates)
+  const skillCandidates = [...new Set(skills.map(skill => `/${skill.name}`))]
+    .filter(candidate => candidate.startsWith(token) && !builtInSet.has(candidate) && !commandSet.has(candidate))
+    .sort((left, right) => left.localeCompare(right))
+  const candidates = [...builtIns, ...commandCandidates, ...skillCandidates]
   if (candidates.length === 0) return undefined
   return {
     start: input.length - token.length,
@@ -250,6 +270,7 @@ export function completionMenuItems(
   candidates: readonly string[],
   skills: readonly SkillEntry[],
   selected?: string,
+  commands: readonly CommandEntry[] = [],
   maxItems = 4,
 ): CompletionMenuItem[] {
   const active = selected ?? candidates[0]
@@ -261,9 +282,11 @@ export function completionMenuItems(
     command.description,
   ]))
   const skillDescriptions = new Map(skills.map(skill => [`/${skill.name}`, skill.description]))
+  const commandDescriptions = new Map(commands.map(command => [`/${command.name}`, command.description]))
 
   return ordered.slice(0, Math.max(0, maxItems)).map(command => {
     const description = builtInDescriptions.get(command)
+      ?? commandDescriptions.get(command)
       ?? skillDescriptions.get(command)
       ?? 'load this skill'
     return {
@@ -302,6 +325,7 @@ export class TuiController {
     usage: EMPTY_USAGE,
     contextWindow: undefined,
     skills: [],
+    commands: [],
     dshVersion: undefined,
     dshUpgrade: undefined,
   }
@@ -349,10 +373,16 @@ export class TuiController {
 
   bindAgent(agent: Agent): void {
     this.agent = agent
+    const commands = this.deps.commands?.list?.(agent).map(command => ({
+      name: command.name,
+      description: command.description,
+      ...(command.input === undefined ? {} : { inputHint: command.input.hint }),
+    })) ?? []
     this.update({
       sessionId: agent.id,
       model: [agent.options.provider, agent.options.model].filter(Boolean).join('/'),
       status: agent.status,
+      commands,
     })
   }
 
@@ -564,7 +594,7 @@ export class TuiController {
       this.append({
         id: `help-${Date.now()}`,
         kind: 'system',
-        text: '/help  /status  /permission  /skills  /cancel  /quit · use /skill-name to load a skill · plugin tools appear as tool rows · Enter while running steers · Ctrl+C cancels, then exits when idle',
+        text: '/help  /status  /permission  /skills  /sessions  /new  /resume  /cancel  /quit · use /skill-name to load a skill · plugin tools appear as tool rows · Enter while running steers · Ctrl+C cancels, then exits when idle',
       })
       return
     }
@@ -589,6 +619,14 @@ export class TuiController {
       void this.skillsCommand()
       return
     }
+    if (text.startsWith('/') && this.deps.commands !== undefined) {
+      void this.pluginCommand(text)
+      return
+    }
+    this.submitMessage(text)
+  }
+
+  private submitMessage(text: string): void {
     if (this.agent === undefined) return
     const message = createUserMessage({
       content: [{ type: 'text', text }],
@@ -597,6 +635,53 @@ export class TuiController {
     if (this.agent.status === 'running') this.agent.steer(message)
     else this.agent.followup(message)
     this.update({ notice: undefined })
+  }
+
+  private async pluginCommand(text: string): Promise<void> {
+    if (this.agent === undefined || this.deps.commands === undefined) return
+    const agent = this.agent
+    try {
+      const execution = await this.deps.commands.execute(agent, text, new AbortController().signal)
+      if (execution === undefined) {
+        this.submitMessage(text)
+        return
+      }
+      const result = execution.result
+      if (result.text !== undefined) {
+        this.append({
+          id: `command-${Date.now()}`,
+          kind: 'system',
+          text: result.text,
+        })
+      }
+      const request = this.deps.sessionCommands?.take(agent)
+      if (request?.kind === 'pick') await this.sessionPicker(request.sessions)
+      else if (request !== undefined) await this.deps.sessionCommands?.restart(request)
+    } catch (error) {
+      this.update({ notice: `command failed: ${error instanceof Error ? error.message : String(error)}` })
+    }
+  }
+
+  private async sessionPicker(sessions: readonly SessionSummary[]): Promise<void> {
+    const answer = normalizeAnswer(await this.askForInput({
+      kind: 'session',
+      title: 'Resume session',
+      optionLayout: 'lines',
+      options: [
+        ...sessions.map((session, index) => `${index + 1} ${session.title} — ${session.id}`),
+        'c cancel',
+      ],
+    }))
+    if (answer === '__cancelled__' || answer === 'c' || answer === 'cancel') return
+    const index = Number.parseInt(answer, 10)
+    const byNumber = Number.isSafeInteger(index) ? sessions[index - 1] : undefined
+    const byId = sessions.find(session => session.id === answer)
+    const session = byNumber ?? byId
+    if (session === undefined) {
+      this.update({ notice: `unknown session choice "${answer}"` })
+      return
+    }
+    await this.deps.sessionCommands?.restart({ kind: 'resume', id: session.id })
   }
 
   cancel(): void {

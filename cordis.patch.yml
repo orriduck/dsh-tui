@@ -24,9 +24,12 @@
     - id: dsh-tui-startup
       name: 'dsh-tui/startup'
 
+    - id: dsh-tui-session-commands
+      name: 'dsh-tui/session-commands'
+
     - id: dsh-tui
       name: 'dsh-tui'
-      inject: [dshTuiStartup]
+      inject: [dshTuiStartup, dshTuiSessionCommands]
       config:
         continueSession: !!js ctx.dshTuiStartup.continueSession
         resumeSessionId: !!js ctx.dshTuiStartup.resumeSessionId

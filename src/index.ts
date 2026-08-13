@@ -16,6 +16,7 @@ import { TuiController } from './controller.js'
 import { HerdrBridge } from './herdr.js'
 import { resolveTheme } from './theme.js'
 import { detectDshVersion, dshUpgradeCommand, isVersionNewer, latestDshVersion } from './version.js'
+import type { SessionSwitchRequest } from './session-commands.js'
 
 export const name = 'dsh-tui'
 export const inject = [
@@ -23,6 +24,7 @@ export const inject = [
   'agents',
   'sessions',
   'sessionPersistence',
+  'dshTuiSessionCommands',
   'userQuestions',
 ]
 
@@ -51,19 +53,21 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
   const persistence = ctx.get('sessionPersistence')
+  const sessionCommands = ctx.get('dshTuiSessionCommands')
   const userQuestions = ctx.get('userQuestions')
   const skills = ctx.get('skills')
   const llm = ctx.get('llm')
   const appExit = ctx.get('appExit')
   if (agents === undefined || defaultModel === undefined || sessions === undefined
-      || persistence === undefined || userQuestions === undefined || appExit === undefined) return
+      || persistence === undefined || sessionCommands === undefined
+      || userQuestions === undefined || appExit === undefined) return
 
   let ink: Instance | undefined
   let handle: Awaited<ReturnType<typeof agents.create>> | undefined
   const herdr = new HerdrBridge()
   const permissionPresets = ctx.get('permissionPresets')
   const commands = ctx.get('commands')
-  const controller = new TuiController(async () => {
+  const shutdown = async (): Promise<void> => {
     if (handle !== undefined) {
       if (handle.agent.status === 'running') handle.agent.cancel({ kind: 'user' })
       await handle.agent.whenIdle()
@@ -72,10 +76,22 @@ async function run(ctx: Context, config: Config): Promise<void> {
     ink?.unmount()
     await herdr.dispose()
     appExit(0)
-  }, {
+  }
+  const restart = async (request: Exclude<SessionSwitchRequest, { kind: 'pick' }>): Promise<void> => {
+    if (process.send === undefined) throw new Error('session switching requires the dsh-tui launcher')
+    await new Promise<void>((resolve, reject) => {
+      process.send?.({ type: 'dsh-tui/restart', request }, (error) => {
+        if (error === null) resolve()
+        else reject(error)
+      })
+    })
+    await shutdown()
+  }
+  const controller = new TuiController(shutdown, {
     ...(permissionPresets === undefined ? {} : { permissionPresets: { names: permissionPresets.names } }),
     ...(commands === undefined ? {} : {
       commands: {
+        list: agent => commands.list(agent),
         execute: (agent, line, signal) => commands.execute(agent, line, signal),
       },
     }),
@@ -94,6 +110,10 @@ async function run(ctx: Context, config: Config): Promise<void> {
         },
       },
     }),
+    sessionCommands: {
+      take: agent => sessionCommands.take(agent),
+      restart,
+    },
   })
   controller.setTheme(theme)
   const dshVersion = detectDshVersion()
