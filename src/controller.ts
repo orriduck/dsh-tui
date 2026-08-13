@@ -1,5 +1,6 @@
 import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { applyKnobEvent, type KnobState } from '@deepseek-ai/dsh-permission-presets'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type {
@@ -18,6 +19,35 @@ type ToolTranscriptItem = {
   status: 'running' | 'done' | 'error'
 }
 
+/** Folded session permission state: last value of each knob event, null before an override. */
+export interface PermissionState {
+  preset: string | null
+  sandbox: string | null
+  approval: string | null
+}
+
+/** Optional host services used by the permission surfaces; absent → the UI degrades gracefully. */
+export interface PermissionDeps {
+  permissionPresets?: {
+    names: readonly string[]
+  }
+  commands?: {
+    execute: (agent: Agent, line: string, signal: AbortSignal) => Promise<unknown>
+  }
+}
+
+/** Human label for a preset name; `danger-full-access` reads as an explicit warning, not color alone. */
+export function permissionLabel(name: string): string {
+  switch (name) {
+    case 'read-only': return 'Read only'
+    case 'workspace-write': return 'Workspace write'
+    case 'danger-full-access': return 'FULL ACCESS'
+    default: return name.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  }
+}
+
+const EMPTY_KNOBS: KnobState = { preset: null, sandbox: null, approval: null }
+
 export type TranscriptItem =
   | { id: string; kind: 'user'; text: string }
   | { id: string; kind: 'assistant'; text: string }
@@ -25,7 +55,7 @@ export type TranscriptItem =
   | ToolTranscriptItem
 
 interface InteractionPrompt {
-  kind: 'approval' | 'question'
+  kind: 'approval' | 'question' | 'permission' | 'permission-confirm'
   title: string
   detail?: string
   options: string[]
@@ -45,6 +75,9 @@ interface TuiState {
   notice: string | undefined
   theme: ResolvedTheme
   themeSource: ThemeSource
+  permission: PermissionState
+  /** Display preset: last selected, derived `custom`, or `default` before any override. */
+  permissionPreset: string
 }
 
 type Listener = () => void
@@ -93,6 +126,8 @@ export class TuiController {
     notice: undefined,
     theme: 'dark',
     themeSource: 'fallback',
+    permission: { preset: null, sandbox: null, approval: null },
+    permissionPreset: 'default',
   }
   private readonly listeners = new Set<Listener>()
   private agent: Agent | undefined
@@ -100,8 +135,12 @@ export class TuiController {
   private exitRequested = false
   private historyItems: TranscriptItem[] | undefined
   private historyChanged = false
+  private knobs: KnobState = EMPTY_KNOBS
 
-  constructor(private readonly onExit: () => Promise<void>) {}
+  constructor(
+    private readonly onExit: () => Promise<void>,
+    private readonly deps: PermissionDeps = {},
+  ) {}
 
   readonly subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener)
@@ -260,7 +299,43 @@ export class TuiController {
         }
         break
       }
+      case 'permission/preset': {
+        this.knobs = applyKnobEvent(this.knobs, event)
+        const preset = String(data.preset ?? '')
+        this.update({
+          permission: this.permissionState(),
+          permissionPreset: this.currentPreset(),
+          ...(this.state.notice === `Switching permission to ${preset}…`
+            ? { notice: undefined }
+            : {}),
+        })
+        break
+      }
+      case 'sandbox/mode':
+      case 'approval/policy': {
+        this.knobs = applyKnobEvent(this.knobs, event)
+        this.update({
+          permission: this.permissionState(),
+          permissionPreset: this.currentPreset(),
+        })
+        break
+      }
     }
+  }
+
+  private permissionState(): PermissionState {
+    return {
+      preset: this.knobs.preset,
+      sandbox: this.knobs.sandbox,
+      approval: this.knobs.approval,
+    }
+  }
+
+  /** The preset to display: last selected preset, derived `custom`, or `default` before any override. */
+  private currentPreset(): string {
+    if (this.knobs.preset !== null) return this.knobs.preset
+    if (this.knobs.sandbox !== null || this.knobs.approval !== null) return 'custom'
+    return 'default'
   }
 
   submit(input: string): void {
@@ -287,11 +362,19 @@ export class TuiController {
       return
     }
     if (text === '/status') {
+      const permission = this.currentPreset()
+      const sandbox = this.state.permission.sandbox ?? 'default'
+      const approval = this.state.permission.approval ?? 'default'
       this.append({
         id: `status-${Date.now()}`,
         kind: 'system',
-        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource})`,
+        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource}) · permission ${permission} · sandbox ${sandbox} · approval ${approval}`,
       })
+      return
+    }
+    if (text === '/permission' || text.startsWith('/permission ')) {
+      const raw = text.slice('/permission'.length).trim()
+      void this.permissionCommand(raw)
       return
     }
     if (this.agent === undefined) return
@@ -352,6 +435,90 @@ export class TuiController {
     if (answer === '__cancelled__' || answer === 'c' || answer === 'cancel') return 'cancelled'
     if (answer === 'y' || answer === 'yes' || answer === 'allow') return 'allowed-once'
     return 'rejected'
+  }
+
+  /** `/permission` — bare opens a numbered picker, an argument switches directly (idle only). */
+  private async permissionCommand(raw: string | undefined): Promise<void> {
+    if (this.agent === undefined) return
+    if (this.agent.status === 'running') {
+      this.update({ notice: 'Switch permission while idle — cancel the current turn first' })
+      return
+    }
+    const names = this.deps.permissionPresets?.names ?? []
+    if (names.length === 0) {
+      this.update({ notice: '/permission unavailable (permission presets service missing)' })
+      return
+    }
+    if (raw === undefined || raw === '') {
+      await this.permissionPicker(names)
+      return
+    }
+    const name = names.find(candidate => candidate === raw)
+    if (name === undefined) {
+      this.update({ notice: `unknown preset "${raw}" (available: ${names.join(', ')})` })
+      return
+    }
+    await this.confirmAndSwitch(name)
+  }
+
+  private async permissionPicker(names: readonly string[]): Promise<void> {
+    const decorated = names.map((name, index) => `${index + 1} ${permissionLabel(name)}`)
+    const answer = normalizeAnswer(await this.askForInput({
+      kind: 'permission',
+      title: 'Permission for this session',
+      detail: `current ${permissionLabel(this.currentPreset())}`,
+      options: decorated,
+    }))
+    if (answer === '__cancelled__') return
+    const index = Number.parseInt(answer, 10)
+    const byNumber = Number.isSafeInteger(index) ? names[index - 1] : undefined
+    const byLabel = names.find(name => normalizeAnswer(permissionLabel(name)) === answer || name === answer)
+    const name = byNumber ?? byLabel
+    if (name === undefined) {
+      this.update({ notice: `unknown choice "${answer}"` })
+      return
+    }
+    await this.confirmAndSwitch(name)
+  }
+
+  private async confirmAndSwitch(name: string): Promise<void> {
+    if (name === 'danger-full-access') {
+      const answer = normalizeAnswer(await this.askForInput({
+        kind: 'permission-confirm',
+        title: 'Enable FULL ACCESS for this session?',
+        detail: 'The file sandbox will no longer restrict writes. Approval policy becomes "never"; approval requests are rejected instead of shown. Type FULL ACCESS to confirm, or anything else to cancel.',
+        options: ['type FULL ACCESS to confirm', 'anything else to cancel'],
+      }))
+      if (answer === '__cancelled__' || answer !== 'full access') {
+        this.update({ notice: 'Full access cancelled' })
+        return
+      }
+    }
+    await this.switchPermission(name)
+  }
+
+  /** The official `/permission` command owns the switch: audit events, validation, and transition notices stay in DSH. */
+  private async switchPermission(name: string): Promise<void> {
+    if (this.agent === undefined) return
+    if (this.currentPreset() === name) {
+      this.update({ notice: `permission already ${name}` })
+      return
+    }
+    const commands = this.deps.commands
+    if (commands === undefined) {
+      this.update({ notice: '/permission unavailable (commands service missing)' })
+      return
+    }
+    this.update({ notice: `Switching permission to ${name}…` })
+    try {
+      const execution = await commands.execute(this.agent, `/permission ${name}`, new AbortController().signal)
+      const result = (execution as { result?: { kind?: string; text?: string } } | undefined)?.result
+      if (result !== undefined && result.kind === 'error') {
+        this.update({ notice: result.text ?? `permission switch to ${name} failed` })
+      }
+    } catch (error) {
+      this.update({ notice: `permission switch failed: ${error instanceof Error ? error.message : String(error)}` })
+    }
   }
 
   async askQuestions(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {

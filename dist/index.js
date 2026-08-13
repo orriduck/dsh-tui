@@ -12,6 +12,461 @@ import { useState, useSyncExternalStore } from "react";
 import { Box, Static, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 
+// src/controller.ts
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { applyKnobEvent } from "@deepseek-ai/dsh-permission-presets";
+function permissionLabel(name2) {
+  switch (name2) {
+    case "read-only":
+      return "Read only";
+    case "workspace-write":
+      return "Workspace write";
+    case "danger-full-access":
+      return "FULL ACCESS";
+    default:
+      return name2.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+}
+var EMPTY_KNOBS = { preset: null, sandbox: null, approval: null };
+function contentText(value) {
+  if (typeof value === "string") return value;
+  if (value === null || typeof value !== "object") return "";
+  if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("\n");
+  const record = value;
+  if (typeof record.text === "string") return record.text;
+  if ("content" in record) return contentText(record.content);
+  return "";
+}
+function messageText(value) {
+  if (value === null || typeof value !== "object") return "";
+  const content = value.content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block !== null && typeof block === "object").filter((block) => block.type === "text" && typeof block.text === "string").map((block) => String(block.text)).join("");
+}
+function truncate(value, max = 220) {
+  const clean = value.replace(/\s+/g, " ").trim();
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}\u2026`;
+}
+function normalizeAnswer(input) {
+  return input.trim().toLocaleLowerCase();
+}
+var TuiController = class {
+  constructor(onExit, deps = {}) {
+    this.onExit = onExit;
+    this.deps = deps;
+  }
+  onExit;
+  deps;
+  state = {
+    items: [],
+    activeTools: [],
+    status: "starting",
+    title: "New session",
+    sessionId: void 0,
+    model: void 0,
+    streamingText: "",
+    reasoningText: "",
+    interaction: void 0,
+    notice: void 0,
+    theme: "dark",
+    themeSource: "fallback",
+    permission: { preset: null, sandbox: null, approval: null },
+    permissionPreset: "default"
+  };
+  listeners = /* @__PURE__ */ new Set();
+  agent;
+  pendingAnswer;
+  exitRequested = false;
+  historyItems;
+  historyChanged = false;
+  knobs = EMPTY_KNOBS;
+  subscribe = (listener) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+  snapshot = () => this.state;
+  notify() {
+    for (const listener of this.listeners) listener();
+  }
+  update(patch) {
+    this.state = { ...this.state, ...patch };
+    if (this.historyItems !== void 0) {
+      this.historyChanged = true;
+      return;
+    }
+    this.notify();
+  }
+  append(item, patch = {}) {
+    if (this.historyItems !== void 0) {
+      this.historyItems.push(item);
+      this.update(patch);
+      return;
+    }
+    this.update({ ...patch, items: [...this.state.items, item] });
+  }
+  bindAgent(agent) {
+    this.agent = agent;
+    this.update({
+      sessionId: agent.id,
+      model: [agent.options.provider, agent.options.model].filter(Boolean).join("/"),
+      status: agent.status
+    });
+  }
+  setStatus(status) {
+    this.update({ status });
+  }
+  setTheme(theme) {
+    this.update({
+      theme: theme.resolved,
+      themeSource: theme.source
+    });
+  }
+  loadHistory(events) {
+    if (events.length === 0) return;
+    this.historyItems = [...this.state.items];
+    this.historyChanged = false;
+    try {
+      for (const event of events) this.ingest(event);
+    } finally {
+      const items = this.historyItems;
+      const changed = this.historyChanged;
+      this.historyItems = void 0;
+      this.historyChanged = false;
+      this.state = { ...this.state, items };
+      if (changed) this.notify();
+    }
+  }
+  ingest(event) {
+    const data = event.data;
+    const eventType = event.type;
+    switch (eventType) {
+      case "session/title": {
+        const title = typeof data.title === "string" ? data.title : void 0;
+        if (title !== void 0) this.update({ title });
+        break;
+      }
+      case "user/message": {
+        const source = data.source;
+        const text = messageText(data);
+        if (source?.kind === "user" && text !== "") {
+          this.append({ id: `event-${event.seq}`, kind: "user", text });
+        }
+        break;
+      }
+      case "assistant/chunk": {
+        const chunk = data.chunk;
+        if (chunk?.type === "text-delta" && typeof chunk.text === "string") {
+          this.update({ streamingText: this.state.streamingText + chunk.text });
+        } else if (chunk?.type === "reasoning-delta" && typeof chunk.text === "string") {
+          this.update({ reasoningText: this.state.reasoningText + chunk.text });
+        }
+        break;
+      }
+      case "assistant/message": {
+        const text = messageText(data.message);
+        const finalText = text || this.state.streamingText;
+        if (finalText !== "") {
+          this.append(
+            { id: `event-${event.seq}`, kind: "assistant", text: finalText },
+            { streamingText: "", reasoningText: "" }
+          );
+        } else {
+          this.update({ streamingText: "", reasoningText: "" });
+        }
+        break;
+      }
+      case "tool/call": {
+        const callId = String(data.callId ?? event.seq);
+        const toolName = String(data.name ?? "tool");
+        const detail = typeof data.arguments === "string" ? truncate(data.arguments) : "";
+        const item = {
+          id: `tool-${callId}`,
+          kind: "tool",
+          name: toolName,
+          detail,
+          status: "running"
+        };
+        this.update({ activeTools: [...this.state.activeTools, item] });
+        break;
+      }
+      case "tool/result": {
+        const message = data.message;
+        const source = message?.source;
+        const callId = String(source?.callId ?? data.callId ?? "");
+        const id = `tool-${callId}`;
+        const resultText = truncate(contentText(message));
+        const failed = data.error !== void 0;
+        const pending = this.state.activeTools.find((item) => item.id === id);
+        if (pending === void 0) break;
+        const completed = {
+          id,
+          kind: "tool",
+          name: pending.name,
+          detail: resultText || pending.detail,
+          status: failed ? "error" : "done"
+        };
+        this.append(completed, {
+          activeTools: this.state.activeTools.filter((item) => item.id !== id)
+        });
+        break;
+      }
+      case "turn/end": {
+        const reason = data.reason;
+        const patch = { streamingText: "", reasoningText: "" };
+        if (reason?.kind === "error") {
+          const error = reason.error;
+          this.append(
+            {
+              id: `event-${event.seq}`,
+              kind: "system",
+              text: `Turn failed: ${String(error?.message ?? "unknown error")}`
+            },
+            patch
+          );
+        } else {
+          this.update(patch);
+        }
+        break;
+      }
+      case "permission/preset": {
+        this.knobs = applyKnobEvent(this.knobs, event);
+        const preset = String(data.preset ?? "");
+        this.update({
+          permission: this.permissionState(),
+          permissionPreset: this.currentPreset(),
+          ...this.state.notice === `Switching permission to ${preset}\u2026` ? { notice: void 0 } : {}
+        });
+        break;
+      }
+      case "sandbox/mode":
+      case "approval/policy": {
+        this.knobs = applyKnobEvent(this.knobs, event);
+        this.update({
+          permission: this.permissionState(),
+          permissionPreset: this.currentPreset()
+        });
+        break;
+      }
+    }
+  }
+  permissionState() {
+    return {
+      preset: this.knobs.preset,
+      sandbox: this.knobs.sandbox,
+      approval: this.knobs.approval
+    };
+  }
+  /** The preset to display: last selected preset, derived `custom`, or `default` before any override. */
+  currentPreset() {
+    if (this.knobs.preset !== null) return this.knobs.preset;
+    if (this.knobs.sandbox !== null || this.knobs.approval !== null) return "custom";
+    return "default";
+  }
+  submit(input) {
+    if (this.pendingAnswer !== void 0) {
+      this.pendingAnswer(input);
+      return;
+    }
+    const text = input.trim();
+    if (text === "") return;
+    if (text === "/quit" || text === "/exit") {
+      void this.exit();
+      return;
+    }
+    if (text === "/cancel") {
+      this.cancel();
+      return;
+    }
+    if (text === "/help") {
+      this.append({
+        id: `help-${Date.now()}`,
+        kind: "system",
+        text: "/help  /status  /cancel  /quit \xB7 Enter while running steers the current turn \xB7 Ctrl+C cancels, then exits when idle"
+      });
+      return;
+    }
+    if (text === "/status") {
+      const permission = this.currentPreset();
+      const sandbox = this.state.permission.sandbox ?? "default";
+      const approval = this.state.permission.approval ?? "default";
+      this.append({
+        id: `status-${Date.now()}`,
+        kind: "system",
+        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 theme ${this.state.theme} (${this.state.themeSource}) \xB7 permission ${permission} \xB7 sandbox ${sandbox} \xB7 approval ${approval}`
+      });
+      return;
+    }
+    if (text === "/permission" || text.startsWith("/permission ")) {
+      const raw = text.slice("/permission".length).trim();
+      void this.permissionCommand(raw);
+      return;
+    }
+    if (this.agent === void 0) return;
+    const message = createUserMessage({
+      content: [{ type: "text", text }],
+      source: { kind: "user" }
+    });
+    if (this.agent.status === "running") this.agent.steer(message);
+    else this.agent.followup(message);
+    this.update({ notice: void 0 });
+  }
+  cancel() {
+    if (this.agent?.status === "running") {
+      this.agent.cancel({ kind: "user" });
+      this.update({ notice: "Cancelling current turn\u2026" });
+    }
+  }
+  cancelOrExit() {
+    if (this.agent?.status === "running") this.cancel();
+    else void this.exit();
+  }
+  async exit() {
+    if (this.exitRequested) return;
+    this.exitRequested = true;
+    this.update({ notice: "Saving session\u2026" });
+    await this.onExit();
+  }
+  askForInput(prompt, signal) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+        this.pendingAnswer = void 0;
+        this.update({ interaction: void 0, notice: void 0 });
+        resolve(value);
+      };
+      const abort = () => finish("__cancelled__");
+      this.pendingAnswer = finish;
+      this.update({ interaction: prompt, notice: void 0 });
+      if (signal?.aborted === true) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+  async requestApproval(request) {
+    const answer = normalizeAnswer(await this.askForInput({
+      kind: "approval",
+      title: `Allow ${request.toolName}?`,
+      ...request.reason === void 0 ? {} : { detail: request.reason },
+      options: ["y allow once", "n reject"]
+    }, request.signal));
+    if (answer === "__cancelled__" || answer === "c" || answer === "cancel") return "cancelled";
+    if (answer === "y" || answer === "yes" || answer === "allow") return "allowed-once";
+    return "rejected";
+  }
+  /** `/permission` — bare opens a numbered picker, an argument switches directly (idle only). */
+  async permissionCommand(raw) {
+    if (this.agent === void 0) return;
+    if (this.agent.status === "running") {
+      this.update({ notice: "Switch permission while idle \u2014 cancel the current turn first" });
+      return;
+    }
+    const names = this.deps.permissionPresets?.names ?? [];
+    if (names.length === 0) {
+      this.update({ notice: "/permission unavailable (permission presets service missing)" });
+      return;
+    }
+    if (raw === void 0 || raw === "") {
+      await this.permissionPicker(names);
+      return;
+    }
+    const name2 = names.find((candidate) => candidate === raw);
+    if (name2 === void 0) {
+      this.update({ notice: `unknown preset "${raw}" (available: ${names.join(", ")})` });
+      return;
+    }
+    await this.confirmAndSwitch(name2);
+  }
+  async permissionPicker(names) {
+    const decorated = names.map((name3, index2) => `${index2 + 1} ${permissionLabel(name3)}`);
+    const answer = normalizeAnswer(await this.askForInput({
+      kind: "permission",
+      title: "Permission for this session",
+      detail: `current ${permissionLabel(this.currentPreset())}`,
+      options: decorated
+    }));
+    if (answer === "__cancelled__") return;
+    const index = Number.parseInt(answer, 10);
+    const byNumber = Number.isSafeInteger(index) ? names[index - 1] : void 0;
+    const byLabel = names.find((name3) => normalizeAnswer(permissionLabel(name3)) === answer || name3 === answer);
+    const name2 = byNumber ?? byLabel;
+    if (name2 === void 0) {
+      this.update({ notice: `unknown choice "${answer}"` });
+      return;
+    }
+    await this.confirmAndSwitch(name2);
+  }
+  async confirmAndSwitch(name2) {
+    if (name2 === "danger-full-access") {
+      const answer = normalizeAnswer(await this.askForInput({
+        kind: "permission-confirm",
+        title: "Enable FULL ACCESS for this session?",
+        detail: 'The file sandbox will no longer restrict writes. Approval policy becomes "never"; approval requests are rejected instead of shown. Type FULL ACCESS to confirm, or anything else to cancel.',
+        options: ["type FULL ACCESS to confirm", "anything else to cancel"]
+      }));
+      if (answer === "__cancelled__" || answer !== "full access") {
+        this.update({ notice: "Full access cancelled" });
+        return;
+      }
+    }
+    await this.switchPermission(name2);
+  }
+  /** The official `/permission` command owns the switch: audit events, validation, and transition notices stay in DSH. */
+  async switchPermission(name2) {
+    if (this.agent === void 0) return;
+    if (this.currentPreset() === name2) {
+      this.update({ notice: `permission already ${name2}` });
+      return;
+    }
+    const commands = this.deps.commands;
+    if (commands === void 0) {
+      this.update({ notice: "/permission unavailable (commands service missing)" });
+      return;
+    }
+    this.update({ notice: `Switching permission to ${name2}\u2026` });
+    try {
+      const execution = await commands.execute(this.agent, `/permission ${name2}`, new AbortController().signal);
+      const result = execution?.result;
+      if (result !== void 0 && result.kind === "error") {
+        this.update({ notice: result.text ?? `permission switch to ${name2} failed` });
+      }
+    } catch (error) {
+      this.update({ notice: `permission switch failed: ${error instanceof Error ? error.message : String(error)}` });
+    }
+  }
+  async askQuestions(request) {
+    const answers = [];
+    for (const question of request.questions) {
+      answers.push(await this.askQuestion(question, request.signal));
+    }
+    return { answers };
+  }
+  async askQuestion(question, signal) {
+    const labels = question.options?.map((option) => option.label) ?? [];
+    const decorated = labels.map((label, index) => `${index + 1} ${label}`);
+    const raw = await this.askForInput({
+      kind: "question",
+      title: question.header ?? question.question,
+      ...question.detail === void 0 ? {} : { detail: question.detail },
+      options: decorated.length === 0 ? ["type an answer"] : decorated,
+      ...question.multiSelect === true ? { multiSelect: true } : {}
+    }, signal);
+    if (raw === "__cancelled__") return { id: question.id, selected: [] };
+    const parts = question.multiSelect === true ? raw.split(",") : [raw];
+    const selected = [];
+    for (const part of parts) {
+      const value = part.trim();
+      const number = Number.parseInt(value, 10);
+      const byNumber = Number.isSafeInteger(number) ? labels[number - 1] : void 0;
+      const byLabel = labels.find((label) => normalizeAnswer(label) === normalizeAnswer(value));
+      const match = byNumber ?? byLabel;
+      if (match !== void 0 && !selected.includes(match)) selected.push(match);
+    }
+    return selected.length > 0 ? { id: question.id, selected } : { id: question.id, selected: [], custom: raw.trim() };
+  }
+};
+
 // src/theme.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
@@ -222,7 +677,9 @@ function App({ controller }) {
     setValue("");
   };
   const prompt = state.interaction;
-  const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : "answer \u203A ";
+  const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : prompt.kind === "permission" || prompt.kind === "permission-confirm" ? "permission \u203A " : "answer \u203A ";
+  const preset = state.permissionPreset;
+  const fullAccess = preset === "danger-full-access";
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx(Box, { borderStyle: "round", borderColor: palette.border, paddingX: 1, children: /* @__PURE__ */ jsxs(Text, { children: [
       /* @__PURE__ */ jsx(Text, { bold: true, color: palette.brand, children: "dsh-tui" }),
@@ -259,328 +716,16 @@ function App({ controller }) {
       /* @__PURE__ */ jsx(TextInput, { value, onChange: setValue, onSubmit: submit })
     ] }),
     /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+      preset === "default" ? null : /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
+        permissionLabel(preset),
+        " \xB7 "
+      ] }),
       "Ctrl+C ",
       state.status === "running" ? "cancel" : "exit",
       " \xB7 /help"
     ] })
   ] });
 }
-
-// src/controller.ts
-import { createUserMessage } from "@deepseek-ai/dsh-llm";
-function contentText(value) {
-  if (typeof value === "string") return value;
-  if (value === null || typeof value !== "object") return "";
-  if (Array.isArray(value)) return value.map(contentText).filter(Boolean).join("\n");
-  const record = value;
-  if (typeof record.text === "string") return record.text;
-  if ("content" in record) return contentText(record.content);
-  return "";
-}
-function messageText(value) {
-  if (value === null || typeof value !== "object") return "";
-  const content = value.content;
-  if (!Array.isArray(content)) return "";
-  return content.filter((block) => block !== null && typeof block === "object").filter((block) => block.type === "text" && typeof block.text === "string").map((block) => String(block.text)).join("");
-}
-function truncate(value, max = 220) {
-  const clean = value.replace(/\s+/g, " ").trim();
-  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}\u2026`;
-}
-function normalizeAnswer(input) {
-  return input.trim().toLocaleLowerCase();
-}
-var TuiController = class {
-  constructor(onExit) {
-    this.onExit = onExit;
-  }
-  onExit;
-  state = {
-    items: [],
-    activeTools: [],
-    status: "starting",
-    title: "New session",
-    sessionId: void 0,
-    model: void 0,
-    streamingText: "",
-    reasoningText: "",
-    interaction: void 0,
-    notice: void 0,
-    theme: "dark",
-    themeSource: "fallback"
-  };
-  listeners = /* @__PURE__ */ new Set();
-  agent;
-  pendingAnswer;
-  exitRequested = false;
-  historyItems;
-  historyChanged = false;
-  subscribe = (listener) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-  snapshot = () => this.state;
-  notify() {
-    for (const listener of this.listeners) listener();
-  }
-  update(patch) {
-    this.state = { ...this.state, ...patch };
-    if (this.historyItems !== void 0) {
-      this.historyChanged = true;
-      return;
-    }
-    this.notify();
-  }
-  append(item, patch = {}) {
-    if (this.historyItems !== void 0) {
-      this.historyItems.push(item);
-      this.update(patch);
-      return;
-    }
-    this.update({ ...patch, items: [...this.state.items, item] });
-  }
-  bindAgent(agent) {
-    this.agent = agent;
-    this.update({
-      sessionId: agent.id,
-      model: [agent.options.provider, agent.options.model].filter(Boolean).join("/"),
-      status: agent.status
-    });
-  }
-  setStatus(status) {
-    this.update({ status });
-  }
-  setTheme(theme) {
-    this.update({
-      theme: theme.resolved,
-      themeSource: theme.source
-    });
-  }
-  loadHistory(events) {
-    if (events.length === 0) return;
-    this.historyItems = [...this.state.items];
-    this.historyChanged = false;
-    try {
-      for (const event of events) this.ingest(event);
-    } finally {
-      const items = this.historyItems;
-      const changed = this.historyChanged;
-      this.historyItems = void 0;
-      this.historyChanged = false;
-      this.state = { ...this.state, items };
-      if (changed) this.notify();
-    }
-  }
-  ingest(event) {
-    const data = event.data;
-    const eventType = event.type;
-    switch (eventType) {
-      case "session/title": {
-        const title = typeof data.title === "string" ? data.title : void 0;
-        if (title !== void 0) this.update({ title });
-        break;
-      }
-      case "user/message": {
-        const source = data.source;
-        const text = messageText(data);
-        if (source?.kind === "user" && text !== "") {
-          this.append({ id: `event-${event.seq}`, kind: "user", text });
-        }
-        break;
-      }
-      case "assistant/chunk": {
-        const chunk = data.chunk;
-        if (chunk?.type === "text-delta" && typeof chunk.text === "string") {
-          this.update({ streamingText: this.state.streamingText + chunk.text });
-        } else if (chunk?.type === "reasoning-delta" && typeof chunk.text === "string") {
-          this.update({ reasoningText: this.state.reasoningText + chunk.text });
-        }
-        break;
-      }
-      case "assistant/message": {
-        const text = messageText(data.message);
-        const finalText = text || this.state.streamingText;
-        if (finalText !== "") {
-          this.append(
-            { id: `event-${event.seq}`, kind: "assistant", text: finalText },
-            { streamingText: "", reasoningText: "" }
-          );
-        } else {
-          this.update({ streamingText: "", reasoningText: "" });
-        }
-        break;
-      }
-      case "tool/call": {
-        const callId = String(data.callId ?? event.seq);
-        const toolName = String(data.name ?? "tool");
-        const detail = typeof data.arguments === "string" ? truncate(data.arguments) : "";
-        const item = {
-          id: `tool-${callId}`,
-          kind: "tool",
-          name: toolName,
-          detail,
-          status: "running"
-        };
-        this.update({ activeTools: [...this.state.activeTools, item] });
-        break;
-      }
-      case "tool/result": {
-        const message = data.message;
-        const source = message?.source;
-        const callId = String(source?.callId ?? data.callId ?? "");
-        const id = `tool-${callId}`;
-        const resultText = truncate(contentText(message));
-        const failed = data.error !== void 0;
-        const pending = this.state.activeTools.find((item) => item.id === id);
-        if (pending === void 0) break;
-        const completed = {
-          id,
-          kind: "tool",
-          name: pending.name,
-          detail: resultText || pending.detail,
-          status: failed ? "error" : "done"
-        };
-        this.append(completed, {
-          activeTools: this.state.activeTools.filter((item) => item.id !== id)
-        });
-        break;
-      }
-      case "turn/end": {
-        const reason = data.reason;
-        const patch = { streamingText: "", reasoningText: "" };
-        if (reason?.kind === "error") {
-          const error = reason.error;
-          this.append(
-            {
-              id: `event-${event.seq}`,
-              kind: "system",
-              text: `Turn failed: ${String(error?.message ?? "unknown error")}`
-            },
-            patch
-          );
-        } else {
-          this.update(patch);
-        }
-        break;
-      }
-    }
-  }
-  submit(input) {
-    if (this.pendingAnswer !== void 0) {
-      this.pendingAnswer(input);
-      return;
-    }
-    const text = input.trim();
-    if (text === "") return;
-    if (text === "/quit" || text === "/exit") {
-      void this.exit();
-      return;
-    }
-    if (text === "/cancel") {
-      this.cancel();
-      return;
-    }
-    if (text === "/help") {
-      this.append({
-        id: `help-${Date.now()}`,
-        kind: "system",
-        text: "/help  /status  /cancel  /quit \xB7 Enter while running steers the current turn \xB7 Ctrl+C cancels, then exits when idle"
-      });
-      return;
-    }
-    if (text === "/status") {
-      this.append({
-        id: `status-${Date.now()}`,
-        kind: "system",
-        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 theme ${this.state.theme} (${this.state.themeSource})`
-      });
-      return;
-    }
-    if (this.agent === void 0) return;
-    const message = createUserMessage({
-      content: [{ type: "text", text }],
-      source: { kind: "user" }
-    });
-    if (this.agent.status === "running") this.agent.steer(message);
-    else this.agent.followup(message);
-    this.update({ notice: void 0 });
-  }
-  cancel() {
-    if (this.agent?.status === "running") {
-      this.agent.cancel({ kind: "user" });
-      this.update({ notice: "Cancelling current turn\u2026" });
-    }
-  }
-  cancelOrExit() {
-    if (this.agent?.status === "running") this.cancel();
-    else void this.exit();
-  }
-  async exit() {
-    if (this.exitRequested) return;
-    this.exitRequested = true;
-    this.update({ notice: "Saving session\u2026" });
-    await this.onExit();
-  }
-  askForInput(prompt, signal) {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value) => {
-        if (settled) return;
-        settled = true;
-        signal?.removeEventListener("abort", abort);
-        this.pendingAnswer = void 0;
-        this.update({ interaction: void 0, notice: void 0 });
-        resolve(value);
-      };
-      const abort = () => finish("__cancelled__");
-      this.pendingAnswer = finish;
-      this.update({ interaction: prompt, notice: void 0 });
-      if (signal?.aborted === true) abort();
-      else signal?.addEventListener("abort", abort, { once: true });
-    });
-  }
-  async requestApproval(request) {
-    const answer = normalizeAnswer(await this.askForInput({
-      kind: "approval",
-      title: `Allow ${request.toolName}?`,
-      ...request.reason === void 0 ? {} : { detail: request.reason },
-      options: ["y allow once", "n reject"]
-    }, request.signal));
-    if (answer === "__cancelled__" || answer === "c" || answer === "cancel") return "cancelled";
-    if (answer === "y" || answer === "yes" || answer === "allow") return "allowed-once";
-    return "rejected";
-  }
-  async askQuestions(request) {
-    const answers = [];
-    for (const question of request.questions) {
-      answers.push(await this.askQuestion(question, request.signal));
-    }
-    return { answers };
-  }
-  async askQuestion(question, signal) {
-    const labels = question.options?.map((option) => option.label) ?? [];
-    const decorated = labels.map((label, index) => `${index + 1} ${label}`);
-    const raw = await this.askForInput({
-      kind: "question",
-      title: question.header ?? question.question,
-      ...question.detail === void 0 ? {} : { detail: question.detail },
-      options: decorated.length === 0 ? ["type an answer"] : decorated,
-      ...question.multiSelect === true ? { multiSelect: true } : {}
-    }, signal);
-    if (raw === "__cancelled__") return { id: question.id, selected: [] };
-    const parts = question.multiSelect === true ? raw.split(",") : [raw];
-    const selected = [];
-    for (const part of parts) {
-      const value = part.trim();
-      const number = Number.parseInt(value, 10);
-      const byNumber = Number.isSafeInteger(number) ? labels[number - 1] : void 0;
-      const byLabel = labels.find((label) => normalizeAnswer(label) === normalizeAnswer(value));
-      const match = byNumber ?? byLabel;
-      if (match !== void 0 && !selected.includes(match)) selected.push(match);
-    }
-    return selected.length > 0 ? { id: question.id, selected } : { id: question.id, selected: [], custom: raw.trim() };
-  }
-};
 
 // src/herdr.ts
 import { spawn } from "child_process";
@@ -729,6 +874,8 @@ async function run(ctx, config) {
   let ink;
   let handle;
   const herdr = new HerdrBridge();
+  const permissionPresets = ctx.get("permissionPresets");
+  const commands = ctx.get("commands");
   const controller = new TuiController(async () => {
     if (handle !== void 0) {
       if (handle.agent.status === "running") handle.agent.cancel({ kind: "user" });
@@ -738,6 +885,13 @@ async function run(ctx, config) {
     ink?.unmount();
     await herdr.dispose();
     appExit(0);
+  }, {
+    ...permissionPresets === void 0 ? {} : { permissionPresets: { names: permissionPresets.names } },
+    ...commands === void 0 ? {} : {
+      commands: {
+        execute: (agent, line, signal) => commands.execute(agent, line, signal)
+      }
+    }
   });
   controller.setTheme(theme);
   const disposeHerdr = controller.subscribe(() => {

@@ -53,8 +53,9 @@ Inside the UI:
 
 - Enter sends a follow-up; while the agent is running, it steers the current turn.
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
-- `/status`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
+- `/status`, `/permission`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
+- The bottom bar shows the current permission preset (Read only / Workspace write / FULL ACCESS), and `/permission` switches it for this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
 
 ## Herdr integration
 
@@ -95,7 +96,7 @@ Run `/status` inside the TUI to see the resolved theme and where it came from.
 
 This package never reads or stores a DeepSeek key itself. It uses the normal DSH credential chain, including `~/.dsh/.credentials.yaml` and supported environment variables.
 
-The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox.
+The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset is always visible in the bottom bar, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
 
 ## Scope
 
@@ -104,6 +105,7 @@ Included in the first release:
 - streaming text and reasoning
 - tool activity and results
 - interactive approvals and questions
+- a persistent permission badge with `/permission` switching (idle-only, full-access confirmation)
 - durable sessions and current-directory continuation
 - one-command profile bootstrap
 - automatic Herdr lifecycle reporting when available

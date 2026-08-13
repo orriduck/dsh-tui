@@ -2,7 +2,7 @@ import React, { useState, useSyncExternalStore } from 'react'
 import { Box, Static, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import type { TranscriptItem } from './controller.js'
-import { TuiController } from './controller.js'
+import { TuiController, permissionLabel } from './controller.js'
 import type { ThemePalette } from './theme.js'
 import { themePalettes } from './theme.js'
 
@@ -43,7 +43,12 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
   const prompt = state.interaction
   const promptLabel = prompt === undefined
     ? state.status === 'running' ? 'steer › ' : 'you › '
-    : prompt.kind === 'approval' ? 'allow › ' : 'answer › '
+    : prompt.kind === 'approval' ? 'allow › '
+    : prompt.kind === 'permission' || prompt.kind === 'permission-confirm' ? 'permission › '
+    : 'answer › '
+
+  const preset = state.permissionPreset
+  const fullAccess = preset === 'danger-full-access'
 
   return (
     <Box flexDirection="column">
@@ -82,7 +87,14 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
         <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
         <TextInput value={value} onChange={setValue} onSubmit={submit} />
       </Box>
-      <Text color={palette.muted}>Ctrl+C {state.status === 'running' ? 'cancel' : 'exit'} · /help</Text>
+      <Text color={palette.muted}>
+        {preset === 'default' ? null : (
+          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+            {permissionLabel(preset)}{' · '}
+          </Text>
+        )}
+        {'Ctrl+C '}{state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
+      </Text>
     </Box>
   )
 }

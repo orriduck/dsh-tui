@@ -57,6 +57,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
   let ink: Instance | undefined
   let handle: Awaited<ReturnType<typeof agents.create>> | undefined
   const herdr = new HerdrBridge()
+  const permissionPresets = ctx.get('permissionPresets')
+  const commands = ctx.get('commands')
   const controller = new TuiController(async () => {
     if (handle !== undefined) {
       if (handle.agent.status === 'running') handle.agent.cancel({ kind: 'user' })
@@ -66,6 +68,13 @@ async function run(ctx: Context, config: Config): Promise<void> {
     ink?.unmount()
     await herdr.dispose()
     appExit(0)
+  }, {
+    ...(permissionPresets === undefined ? {} : { permissionPresets: { names: permissionPresets.names } }),
+    ...(commands === undefined ? {} : {
+      commands: {
+        execute: (agent, line, signal) => commands.execute(agent, line, signal),
+      },
+    }),
   })
   controller.setTheme(theme)
   const disposeHerdr = controller.subscribe(() => { void herdr.sync(controller.snapshot()) })
