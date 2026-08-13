@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A small, session-aware terminal UI for DeepSeek Harness",
   "type": "module",
   "bin": {
@@ -24,6 +24,8 @@
     "docs/assets",
     "cordis.patch.yml",
     "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

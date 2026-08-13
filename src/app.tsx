@@ -100,8 +100,7 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
 
   const preset = state.permissionPreset
   const fullAccess = preset === 'danger-full-access'
-  const sandbox = state.permission.sandbox ?? 'default'
-  const approval = state.permission.approval ?? 'default'
+  const showPermission = preset !== 'default' && preset !== 'workspace-write'
   const model = state.model?.split('/').at(-1) ?? 'model pending'
 
   return (
@@ -135,32 +134,36 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
       )}
       <Box
         marginTop={1}
-        borderStyle="round"
-        borderColor={prompt === undefined ? palette.border : palette.warning}
+        flexDirection="column"
+        backgroundColor={palette.composerBackground}
         paddingX={1}
+        paddingY={1}
         width="100%"
       >
-        <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
-        <Box flexGrow={1}>
-          <TextInput value={value} onChange={changeValue} onSubmit={submit} />
+        <Box>
+          <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
+          <Box flexGrow={1}>
+            <TextInput value={value} onChange={changeValue} onSubmit={submit} />
+          </Box>
         </Box>
-      </Box>
-      <Box flexDirection="column" paddingX={1}>
+        <Text color={palette.muted}>
+          {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
+        </Text>
+        {state.dshUpgrade === undefined ? null : (
+          <Text color={palette.warning}>
+            {'↑ DSH '}{state.dshUpgrade.version}{' available · '}{state.dshUpgrade.command}
+          </Text>
+        )}
         <Text>
-          <Text color={palette.muted}>⚙ </Text>
-          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
-            {permissionLabel(preset)}
-          </Text>
+          {showPermission ? (
+            <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+              {permissionLabel(preset)}{' · '}
+            </Text>
+          ) : null}
           <Text color={palette.muted}>
-            {' · sandbox '}{sandbox}
+            {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
+            {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
           </Text>
-        </Text>
-        <Text color={palette.muted}>
-          {'approval '}{approval}{' · '}{model}{' · '}{state.status}
-        </Text>
-        <Text color={palette.muted}>
-          {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
-          {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
         </Text>
       </Box>
     </Box>

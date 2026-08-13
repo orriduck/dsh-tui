@@ -20,6 +20,7 @@ export interface ThemePalette {
   warning: string
   muted: string
   border: string
+  composerBackground: string
 }
 
 export const themePalettes: Record<ResolvedTheme, ThemePalette> = {
@@ -31,6 +32,7 @@ export const themePalettes: Record<ResolvedTheme, ThemePalette> = {
     warning: 'yellowBright',
     muted: 'gray',
     border: 'gray',
+    composerBackground: '#2c2c2c',
   },
   light: {
     brand: 'magenta',
@@ -40,6 +42,7 @@ export const themePalettes: Record<ResolvedTheme, ThemePalette> = {
     warning: 'yellow',
     muted: 'gray',
     border: 'gray',
+    composerBackground: '#e7e7e7',
   },
 }
 

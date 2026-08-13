@@ -15,6 +15,7 @@ import { App } from './app.js'
 import { TuiController } from './controller.js'
 import { HerdrBridge } from './herdr.js'
 import { resolveTheme } from './theme.js'
+import { detectDshVersion, dshUpgradeCommand, isVersionNewer, latestDshVersion } from './version.js'
 
 export const name = 'dsh-tui'
 export const inject = [
@@ -95,6 +96,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
     }),
   })
   controller.setTheme(theme)
+  const dshVersion = detectDshVersion()
+  controller.setDshVersion(dshVersion)
   const disposeHerdr = controller.subscribe(() => { void herdr.sync(controller.snapshot()) })
   void herdr.sync(controller.snapshot())
   ctx.effect(() => async () => {
@@ -153,6 +156,16 @@ async function run(ctx: Context, config: Config): Promise<void> {
   })
 
   ink = render(React.createElement(App, { controller }), { exitOnCtrlC: false })
+  if (dshVersion !== undefined && process.env.DSH_TUI_UPDATE_CHECK !== '0') {
+    void latestDshVersion().then((latestVersion) => {
+      if (latestVersion !== undefined && isVersionNewer(latestVersion, dshVersion)) {
+        controller.setDshUpgrade({
+          version: latestVersion,
+          command: dshUpgradeCommand(latestVersion),
+        })
+      }
+    })
+  }
   if (config.initialPrompt !== undefined) controller.submit(config.initialPrompt)
 
   ctx.effect(() => async () => {

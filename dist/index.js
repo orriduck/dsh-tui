@@ -161,7 +161,9 @@ var TuiController = class {
     permissionPreset: "default",
     usage: EMPTY_USAGE,
     contextWindow: void 0,
-    skills: []
+    skills: [],
+    dshVersion: void 0,
+    dshUpgrade: void 0
   };
   listeners = /* @__PURE__ */ new Set();
   agent;
@@ -215,6 +217,12 @@ var TuiController = class {
     this.update({
       contextWindow: typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : void 0
     });
+  }
+  setDshVersion(dshVersion) {
+    this.update({ dshVersion });
+  }
+  setDshUpgrade(dshUpgrade) {
+    this.update({ dshUpgrade });
   }
   loadHistory(events) {
     if (events.length === 0) return;
@@ -402,7 +410,7 @@ var TuiController = class {
       this.append({
         id: `status-${Date.now()}`,
         kind: "system",
-        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 theme ${this.state.theme} (${this.state.themeSource}) \xB7 permission ${permission} \xB7 sandbox ${sandbox} \xB7 approval ${approval} \xB7 tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} \xB7 ${contextUsageLabel(usage, this.state.contextWindow)} \xB7 skills ${this.state.skills.length}`
+        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 dsh ${this.state.dshVersion ?? "unknown"}${this.state.dshUpgrade === void 0 ? "" : ` \xB7 update ${this.state.dshUpgrade.version}: ${this.state.dshUpgrade.command}`} \xB7 theme ${this.state.theme} (${this.state.themeSource}) \xB7 permission ${permission} \xB7 sandbox ${sandbox} \xB7 approval ${approval} \xB7 tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} \xB7 ${contextUsageLabel(usage, this.state.contextWindow)} \xB7 skills ${this.state.skills.length}`
       });
       return;
     }
@@ -631,7 +639,8 @@ var themePalettes = {
     error: "redBright",
     warning: "yellowBright",
     muted: "gray",
-    border: "gray"
+    border: "gray",
+    composerBackground: "#2c2c2c"
   },
   light: {
     brand: "magenta",
@@ -640,7 +649,8 @@ var themePalettes = {
     error: "red",
     warning: "yellow",
     muted: "gray",
-    border: "gray"
+    border: "gray",
+    composerBackground: "#e7e7e7"
   }
 };
 function parsePreference(value, label) {
@@ -865,8 +875,7 @@ function App({ controller }) {
   const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : prompt.kind === "permission" || prompt.kind === "permission-confirm" ? "permission \u203A " : "answer \u203A ";
   const preset = state.permissionPreset;
   const fullAccess = preset === "danger-full-access";
-  const sandbox = state.permission.sandbox ?? "default";
-  const approval = state.permission.approval ?? "default";
+  const showPermission = preset !== "default" && preset !== "workspace-write";
   const model = state.model?.split("/").at(-1) ?? "model pending";
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", children: [
     /* @__PURE__ */ jsx(Static, { items: state.items, children: (item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id) }),
@@ -896,40 +905,44 @@ function App({ controller }) {
       Box,
       {
         marginTop: 1,
-        borderStyle: "round",
-        borderColor: prompt === void 0 ? palette.border : palette.warning,
+        flexDirection: "column",
+        backgroundColor: palette.composerBackground,
         paddingX: 1,
+        paddingY: 1,
         width: "100%",
         children: [
-          /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
-          /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
+          /* @__PURE__ */ jsxs(Box, { children: [
+            /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
+            /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
+          ] }),
+          /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+            model,
+            " \xB7 ",
+            state.status,
+            " \xB7 dsh ",
+            state.dshVersion ?? "unknown"
+          ] }),
+          state.dshUpgrade === void 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.warning, children: [
+            "\u2191 DSH ",
+            state.dshUpgrade.version,
+            " available \xB7 ",
+            state.dshUpgrade.command
+          ] }),
+          /* @__PURE__ */ jsxs(Text, { children: [
+            showPermission ? /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
+              permissionLabel(preset),
+              " \xB7 "
+            ] }) : null,
+            /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+              contextUsageLabel(state.usage, state.contextWindow),
+              " \xB7 Ctrl+C ",
+              state.status === "running" ? "cancel" : "exit",
+              " \xB7 /help"
+            ] })
+          ] })
         ]
       }
-    ),
-    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", paddingX: 1, children: [
-      /* @__PURE__ */ jsxs(Text, { children: [
-        /* @__PURE__ */ jsx(Text, { color: palette.muted, children: "\u2699 " }),
-        /* @__PURE__ */ jsx(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: permissionLabel(preset) }),
-        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-          " \xB7 sandbox ",
-          sandbox
-        ] })
-      ] }),
-      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-        "approval ",
-        approval,
-        " \xB7 ",
-        model,
-        " \xB7 ",
-        state.status
-      ] }),
-      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-        contextUsageLabel(state.usage, state.contextWindow),
-        " \xB7 Ctrl+C ",
-        state.status === "running" ? "cancel" : "exit",
-        " \xB7 /help"
-      ] })
-    ] })
+    )
   ] });
 }
 
@@ -1047,6 +1060,83 @@ var HerdrBridge = class {
   }
 };
 
+// src/version.ts
+import { spawnSync as spawnSync2 } from "child_process";
+var DSH_REGISTRY_URL = "https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest";
+var SEMVER = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+function parseVersion(value) {
+  const match = SEMVER.exec(value.trim());
+  if (match === null) return void 0;
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4]?.split(".") ?? []
+  };
+}
+function compareIdentifier(left, right) {
+  const leftNumber = /^\d+$/.test(left) ? Number(left) : void 0;
+  const rightNumber = /^\d+$/.test(right) ? Number(right) : void 0;
+  if (leftNumber !== void 0 && rightNumber !== void 0) return Math.sign(leftNumber - rightNumber);
+  if (leftNumber !== void 0) return -1;
+  if (rightNumber !== void 0) return 1;
+  return left.localeCompare(right);
+}
+function isVersionNewer(candidate, current) {
+  const next = parseVersion(candidate);
+  const installed = parseVersion(current);
+  if (next === void 0 || installed === void 0) return false;
+  for (let index = 0; index < next.core.length; index += 1) {
+    const difference = (next.core[index] ?? 0) - (installed.core[index] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  if (next.prerelease.length === 0) return installed.prerelease.length > 0;
+  if (installed.prerelease.length === 0) return false;
+  const length = Math.max(next.prerelease.length, installed.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const left = next.prerelease[index];
+    const right = installed.prerelease[index];
+    if (left === void 0) return false;
+    if (right === void 0) return true;
+    const comparison = compareIdentifier(left, right);
+    if (comparison !== 0) return comparison > 0;
+  }
+  return false;
+}
+function parseDshVersion(output) {
+  const version = output.trim().split(/\s+/).at(-1);
+  return version !== void 0 && parseVersion(version) !== void 0 ? version.replace(/^v/, "") : void 0;
+}
+function detectDshVersion() {
+  const result = spawnSync2("dsh", ["--version"], {
+    encoding: "utf8",
+    timeout: 750,
+    env: { ...process.env, DSH_TELEMETRY_DISABLED: "1" },
+    stdio: ["ignore", "pipe", "ignore"]
+  });
+  return result.status === 0 && typeof result.stdout === "string" ? parseDshVersion(result.stdout) : void 0;
+}
+async function latestDshVersion(fetcher = globalThis.fetch, timeoutMs = 1500) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const response = await fetcher(DSH_REGISTRY_URL, {
+      signal: abort.signal,
+      headers: { accept: "application/json" }
+    });
+    if (!response.ok) return void 0;
+    const document = await response.json();
+    if (document === null || typeof document !== "object") return void 0;
+    const version = document.version;
+    return typeof version === "string" && parseVersion(version) !== void 0 ? version : void 0;
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function dshUpgradeCommand(version) {
+  return `npm install -g @deepseek-ai/dsh@${version}`;
+}
+
 // src/index.ts
 var name = "dsh-tui";
 var inject = [
@@ -1115,6 +1205,8 @@ async function run(ctx, config) {
     }
   });
   controller.setTheme(theme);
+  const dshVersion = detectDshVersion();
+  controller.setDshVersion(dshVersion);
   const disposeHerdr = controller.subscribe(() => {
     void herdr.sync(controller.snapshot());
   });
@@ -1165,6 +1257,16 @@ async function run(ctx, config) {
     if (session === handle?.agent.session) controller.ingest(event);
   });
   ink = render(React2.createElement(App, { controller }), { exitOnCtrlC: false });
+  if (dshVersion !== void 0 && process.env.DSH_TUI_UPDATE_CHECK !== "0") {
+    void latestDshVersion().then((latestVersion) => {
+      if (latestVersion !== void 0 && isVersionNewer(latestVersion, dshVersion)) {
+        controller.setDshUpgrade({
+          version: latestVersion,
+          command: dshUpgradeCommand(latestVersion)
+        });
+      }
+    });
+  }
   if (config.initialPrompt !== void 0) controller.submit(config.initialPrompt);
   ctx.effect(() => async () => {
     disposeEvents();

@@ -471,6 +471,11 @@ describe('skills command', () => {
       usage: { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 300 },
     }))
     controller.setContextWindow(128_000)
+    controller.setDshVersion('0.1.0-rc.6')
+    controller.setDshUpgrade({
+      version: '0.1.0-rc.7',
+      command: 'npm install -g @deepseek-ai/dsh@0.1.0-rc.7',
+    })
 
     controller.submit('/status')
 
@@ -478,5 +483,7 @@ describe('skills command', () => {
     expect(last.text).toContain('tokens in 10k / out 2k')
     expect(last.text).toContain('ctx 12.3k/128k (10%)')
     expect(last.text).toContain('skills 1')
+    expect(last.text).toContain('dsh 0.1.0-rc.6')
+    expect(last.text).toContain('update 0.1.0-rc.7: npm install -g @deepseek-ai/dsh@0.1.0-rc.7')
   })
 })

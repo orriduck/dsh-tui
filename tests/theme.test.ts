@@ -6,6 +6,7 @@ import {
   colorFgBgTheme,
   loadThemePreference,
   parseOsc11Theme,
+  themePalettes,
   themeConfigPath,
 } from '../src/theme.js'
 
@@ -57,6 +58,11 @@ describe('theme configuration', () => {
 })
 
 describe('automatic theme detection', () => {
+  it('uses distinct neutral composer surfaces for light and dark terminals', () => {
+    expect(themePalettes.light.composerBackground).toBe('#e7e7e7')
+    expect(themePalettes.dark.composerBackground).toBe('#2c2c2c')
+  })
+
   it('classifies common OSC 11 terminal background responses', () => {
     expect(parseOsc11Theme('\u001B]11;rgb:0000/0000/0000\u0007')).toBe('dark')
     expect(parseOsc11Theme('\u001B]11;rgb:ffff/ffff/ffff\u001B\\')).toBe('light')

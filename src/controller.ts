@@ -104,6 +104,8 @@ interface TuiState {
   usage: UsageState
   contextWindow: number | undefined
   skills: SkillEntry[]
+  dshVersion: string | undefined
+  dshUpgrade: { version: string; command: string } | undefined
 }
 
 type Listener = () => void
@@ -273,6 +275,8 @@ export class TuiController {
     usage: EMPTY_USAGE,
     contextWindow: undefined,
     skills: [],
+    dshVersion: undefined,
+    dshUpgrade: undefined,
   }
   private readonly listeners = new Set<Listener>()
   private agent: Agent | undefined
@@ -342,6 +346,14 @@ export class TuiController {
         ? contextWindow
         : undefined,
     })
+  }
+
+  setDshVersion(dshVersion: string | undefined): void {
+    this.update({ dshVersion })
+  }
+
+  setDshUpgrade(dshUpgrade: { version: string; command: string } | undefined): void {
+    this.update({ dshUpgrade })
   }
 
   loadHistory(events: readonly SessionEvent[]): void {
@@ -536,7 +548,7 @@ export class TuiController {
       this.append({
         id: `status-${Date.now()}`,
         kind: 'system',
-        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource}) · permission ${permission} · sandbox ${sandbox} · approval ${approval} · tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} · ${contextUsageLabel(usage, this.state.contextWindow)} · skills ${this.state.skills.length}`,
+        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · dsh ${this.state.dshVersion ?? 'unknown'}${this.state.dshUpgrade === undefined ? '' : ` · update ${this.state.dshUpgrade.version}: ${this.state.dshUpgrade.command}`} · theme ${this.state.theme} (${this.state.themeSource}) · permission ${permission} · sandbox ${sandbox} · approval ${approval} · tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} · ${contextUsageLabel(usage, this.state.contextWindow)} · skills ${this.state.skills.length}`,
       })
       return
     }

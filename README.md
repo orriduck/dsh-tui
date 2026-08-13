@@ -1,5 +1,7 @@
 # dsh-tui
 
+[简体中文](README.zh-CN.md) · [Changelog](CHANGELOG.md)
+
 A small terminal UI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), built as an out-of-tree DSH profile bundle.
 
 It is intentionally optimized for one-person daily use: start in the current directory, chat immediately, close the terminal, and continue the same workspace later.
@@ -55,7 +57,7 @@ Inside the UI:
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
 - `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
-- The bordered composer keeps input visually anchored; the status bar beneath it always shows the current permission preset, sandbox/approval policy, model state, and accumulated context usage. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- A neutral composer surface keeps input and its compact two-line status together. Its background follows the resolved light/dark theme; the status shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
 - `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills offer Tab completion.
 
 ## Interface states
@@ -103,21 +105,32 @@ DSH_TUI_THEME=dark dsh-tui
 
 Run `/status` inside the TUI to see the resolved theme and where it came from.
 
+## DSH version and updates
+
+The status bar reads the installed Harness version from `dsh --version`. After startup, a non-blocking check against the official npm registry looks for a newer `@deepseek-ai/dsh` release. If one exists, the status bar shows the exact command to install it, for example:
+
+```bash
+npm install -g @deepseek-ai/dsh@0.1.0-rc.7
+```
+
+The check times out quickly and silently disappears when offline, so it never blocks the TUI. Set `DSH_TUI_UPDATE_CHECK=0` to disable the registry request. DeepSeek Harness is still a developer preview; review the [changelog](CHANGELOG.md) and compatibility notes before upgrading across preview releases.
+
 ## Credentials and permissions
 
 This package never reads or stores a DeepSeek key itself. It uses the normal DSH credential chain, including `~/.dsh/.credentials.yaml` and supported environment variables.
 
-The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset and underlying sandbox/approval values are always visible beneath the composer, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
+The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset remains visible in the composer status, while `/status` provides the underlying sandbox/approval facts. `/permission` (bare or with a preset name) switches through the official command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
 
 ## Scope
 
-Included in the first release:
+Included:
 
 - streaming text and reasoning
 - tool activity and results
 - interactive approvals and questions
 - a persistent permission badge with `/permission` switching (idle-only, full-access confirmation)
 - context-window usage and token totals
+- installed DSH version and an optional npm update hint
 - skill discovery, direct invocation visibility, and Tab completion
 - durable sessions and current-directory continuation
 - one-command profile bootstrap
@@ -139,6 +152,8 @@ dsh --profile tui
 ```
 
 The official Harness is currently a developer preview. DeepSeek package versions are pinned to `0.1.0-rc.6` so an upstream breaking change is visible instead of silently changing behavior.
+
+Release history is maintained in [CHANGELOG.md](CHANGELOG.md). `package.json` remains the machine-readable source of the current dsh-tui version.
 
 ## License
 
