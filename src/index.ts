@@ -12,6 +12,7 @@ import { render, type Instance } from 'ink'
 import React from 'react'
 import { App } from './app.js'
 import { TuiController } from './controller.js'
+import { HerdrBridge } from './herdr.js'
 import { resolveTheme } from './theme.js'
 
 export const name = 'dsh-tui'
@@ -52,6 +53,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
 
   let ink: Instance | undefined
   let handle: Awaited<ReturnType<typeof agents.create>> | undefined
+  const herdr = new HerdrBridge()
   const controller = new TuiController(async () => {
     if (handle !== undefined) {
       if (handle.agent.status === 'running') handle.agent.cancel({ kind: 'user' })
@@ -59,9 +61,16 @@ async function run(ctx: Context, config: Config): Promise<void> {
       await sessions.flush(handle.agent.session)
     }
     ink?.unmount()
+    await herdr.dispose()
     appExit(0)
   })
   controller.setTheme(theme)
+  const disposeHerdr = controller.subscribe(() => { void herdr.sync(controller.snapshot()) })
+  void herdr.sync(controller.snapshot())
+  ctx.effect(() => async () => {
+    disposeHerdr()
+    await herdr.dispose()
+  })
 
   const disposeQuestions = userQuestions.registerProvider({
     ask: request => controller.askQuestions(request),

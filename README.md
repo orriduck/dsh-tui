@@ -56,6 +56,21 @@ Inside the UI:
 - `/status`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
 
+## Herdr integration
+
+When `dsh-tui` runs inside [Herdr](https://herdr.dev), it connects automatically. No separate hook installation is needed.
+
+The bridge reports:
+
+- `working`, `blocked`, and `idle`/`done` lifecycle state
+- the current DSH session identity
+- the generated session title and `DeepSeek` display label
+- clean release when the TUI exits
+
+This makes the DeepSeek tab visible to `herdr agent list`, `get`, and `wait`, including notifications when a background turn finishes or needs an answer. It is inert outside a Herdr-managed pane and never changes DSH credentials or permissions.
+
+Herdr 0.8.0 does not yet include a native `dsh` agent kind, so `herdr agent start --kind dsh` and `herdr agent prompt` are not available yet. Start and type into the TUI normally; native launch/control belongs in a future Herdr integration.
+
 ## Appearance
 
 The first launch creates `~/.dsh/tui.json`:
@@ -91,8 +106,9 @@ Included in the first release:
 - interactive approvals and questions
 - durable sessions and current-directory continuation
 - one-command profile bootstrap
+- automatic Herdr lifecycle reporting when available
 
-Not included yet: split panes, remote persistence, a graphical session browser, image attachments, or Web-client parity. Herdr/tmux can own terminal persistence around this TUI if needed.
+Not included yet: split panes, remote persistence, a graphical session browser, image attachments, native Herdr launch/control, or Web-client parity. Herdr/tmux can own terminal persistence around this TUI if needed.
 
 ## Development
 

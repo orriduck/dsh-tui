@@ -525,6 +525,120 @@ var TuiController = class {
   }
 };
 
+// src/herdr.ts
+import { spawn } from "child_process";
+var SOURCE = "dsh-tui";
+var AGENT = "deepseek";
+function runHerdr(args, env) {
+  return new Promise((resolve) => {
+    const child = spawn("herdr", args, { env, stdio: "ignore" });
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish();
+    }, 1e3);
+    child.once("error", finish);
+    child.once("exit", finish);
+  });
+}
+function agentState(snapshot) {
+  if (snapshot.interaction !== void 0) return "blocked";
+  if (snapshot.status === "idle") return "idle";
+  return "working";
+}
+var HerdrBridge = class {
+  enabled;
+  paneId;
+  runner;
+  queue = Promise.resolve();
+  sequence = BigInt(Date.now()) * 1000000n;
+  lastState;
+  lastSessionId;
+  lastTitle;
+  disposed = false;
+  constructor(env = process.env, runner = (args) => runHerdr(args, env)) {
+    this.paneId = env.HERDR_PANE_ID?.trim() ?? "";
+    this.enabled = env.HERDR_ENV === "1" && this.paneId !== "" && (env.HERDR_SOCKET_PATH?.trim() ?? "") !== "";
+    this.runner = runner;
+  }
+  enqueue(args) {
+    this.sequence += 1n;
+    const command = [...args, "--seq", String(this.sequence)];
+    this.queue = this.queue.then(() => this.runner(command)).catch(() => {
+    });
+    return this.queue;
+  }
+  sync(snapshot) {
+    if (!this.enabled || this.disposed) return this.queue;
+    const state = agentState(snapshot);
+    if (state !== this.lastState) {
+      this.lastState = state;
+      void this.enqueue([
+        "pane",
+        "report-agent",
+        this.paneId,
+        "--source",
+        SOURCE,
+        "--agent",
+        AGENT,
+        "--state",
+        state
+      ]);
+    }
+    if (snapshot.sessionId !== void 0 && snapshot.sessionId !== this.lastSessionId) {
+      this.lastSessionId = snapshot.sessionId;
+      void this.enqueue([
+        "pane",
+        "report-agent-session",
+        this.paneId,
+        "--source",
+        SOURCE,
+        "--agent",
+        AGENT,
+        "--agent-session-id",
+        snapshot.sessionId
+      ]);
+    }
+    const title = snapshot.title.trim().slice(0, 120);
+    if (title !== "" && title !== this.lastTitle) {
+      this.lastTitle = title;
+      void this.enqueue([
+        "pane",
+        "report-metadata",
+        this.paneId,
+        "--source",
+        SOURCE,
+        "--agent",
+        AGENT,
+        "--display-agent",
+        "DeepSeek",
+        "--title",
+        title
+      ]);
+    }
+    return this.queue;
+  }
+  dispose() {
+    if (!this.enabled || this.disposed) return this.queue;
+    this.disposed = true;
+    return this.enqueue([
+      "pane",
+      "release-agent",
+      this.paneId,
+      "--source",
+      SOURCE,
+      "--agent",
+      AGENT
+    ]);
+  }
+};
+
 // src/index.ts
 var name = "dsh-tui";
 var inject = [
@@ -552,6 +666,7 @@ async function run(ctx, config) {
   if (agents === void 0 || defaultModel === void 0 || sessions === void 0 || persistence === void 0 || userQuestions === void 0 || appExit === void 0) return;
   let ink;
   let handle;
+  const herdr = new HerdrBridge();
   const controller = new TuiController(async () => {
     if (handle !== void 0) {
       if (handle.agent.status === "running") handle.agent.cancel({ kind: "user" });
@@ -559,9 +674,18 @@ async function run(ctx, config) {
       await sessions.flush(handle.agent.session);
     }
     ink?.unmount();
+    await herdr.dispose();
     appExit(0);
   });
   controller.setTheme(theme);
+  const disposeHerdr = controller.subscribe(() => {
+    void herdr.sync(controller.snapshot());
+  });
+  void herdr.sync(controller.snapshot());
+  ctx.effect(() => async () => {
+    disposeHerdr();
+    await herdr.dispose();
+  });
   const disposeQuestions = userQuestions.registerProvider({
     ask: (request) => controller.askQuestions(request)
   });

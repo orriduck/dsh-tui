@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A small, session-aware terminal UI for DeepSeek Harness",
   "type": "module",
   "bin": {
