@@ -8,7 +8,7 @@ import { render } from "ink";
 import React2 from "react";
 
 // src/app.tsx
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { Box, Static, Text, useInput } from "ink";
 import TextInput from "ink-text-input";
 
@@ -28,6 +28,13 @@ function permissionLabel(name2) {
   }
 }
 var EMPTY_KNOBS = { preset: null, sandbox: null, approval: null };
+var EMPTY_USAGE = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0
+};
 function contentText(value) {
   if (typeof value === "string") return value;
   if (value === null || typeof value !== "object") return "";
@@ -50,6 +57,86 @@ function truncate(value, max = 220) {
 function normalizeAnswer(input) {
   return input.trim().toLocaleLowerCase();
 }
+function usageValue(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+function addUsage(current, value) {
+  if (value === null || typeof value !== "object") return current;
+  const usage = value;
+  return {
+    inputTokens: current.inputTokens + usageValue(usage.inputTokens),
+    outputTokens: current.outputTokens + usageValue(usage.outputTokens),
+    cacheReadTokens: current.cacheReadTokens + usageValue(usage.cacheReadTokens),
+    cacheWriteTokens: current.cacheWriteTokens + usageValue(usage.cacheWriteTokens),
+    reasoningTokens: current.reasoningTokens + usageValue(usage.reasoningTokens)
+  };
+}
+function formatTokens(value) {
+  if (value < 1e3) return String(value);
+  const compact = value / 1e3;
+  return `${compact >= 100 || Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}k`;
+}
+function contextTokens(usage) {
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+}
+function contextUsageLabel(usage, contextWindow) {
+  const used = contextTokens(usage);
+  if (contextWindow === void 0 || contextWindow <= 0) return `ctx ${formatTokens(used)}`;
+  const percentage = Math.round(used / contextWindow * 100);
+  return `ctx ${formatTokens(used)}/${formatTokens(contextWindow)} (${percentage}%)`;
+}
+function skillEntries(value) {
+  if (!Array.isArray(value)) return [];
+  const entries = [];
+  for (const item of value) {
+    if (item === null || typeof item !== "object") continue;
+    const record = item;
+    if (typeof record.name !== "string" || typeof record.description !== "string") continue;
+    entries.push({ name: record.name, description: record.description });
+  }
+  return entries;
+}
+function toolDetail(name2, rawArguments) {
+  if (typeof rawArguments !== "string") return "";
+  if (name2 === "skill") {
+    try {
+      const parsed = JSON.parse(rawArguments);
+      if (typeof parsed.name === "string") return truncate(parsed.name);
+    } catch {
+    }
+  }
+  return truncate(rawArguments);
+}
+var BUILTIN_COMMANDS = ["help", "status", "cancel", "quit", "exit", "permission", "skills"];
+function completionCandidates(input, skills) {
+  const match = /(?:^|\s)(\/[a-z0-9-]*)$/.exec(input);
+  const token = match?.[1];
+  if (token === void 0) return void 0;
+  const builtIns = BUILTIN_COMMANDS.map((command) => `/${command}`).filter((candidate) => candidate.startsWith(token)).sort((left, right) => left.localeCompare(right));
+  const builtInSet = new Set(BUILTIN_COMMANDS.map((command) => `/${command}`));
+  const skillCandidates = [...new Set(skills.map((skill) => `/${skill.name}`))].filter((candidate) => candidate.startsWith(token) && !builtInSet.has(candidate)).sort((left, right) => left.localeCompare(right));
+  const candidates = [...builtIns, ...skillCandidates];
+  if (candidates.length === 0) return void 0;
+  return {
+    start: input.length - token.length,
+    end: input.length,
+    candidates
+  };
+}
+function applyCompletion(input, match, candidate) {
+  return `${input.slice(0, match.start)}${candidate}${input.slice(match.end)}`;
+}
+function completionPreview(candidates, selected, maxLength = 44) {
+  const ordered = selected === void 0 ? [...candidates] : [selected, ...candidates.filter((candidate) => candidate !== selected)];
+  const shown = [];
+  for (const candidate of ordered) {
+    const next = [...shown, candidate].join(" \xB7 ");
+    const hasMore = shown.length + 1 < ordered.length;
+    if (shown.length > 0 && `${next}${hasMore ? " \xB7 \u2026" : ""}`.length > maxLength) break;
+    shown.push(candidate);
+  }
+  return `${shown.join(" \xB7 ")}${shown.length < ordered.length ? " \xB7 \u2026" : ""}`;
+}
 var TuiController = class {
   constructor(onExit, deps = {}) {
     this.onExit = onExit;
@@ -71,7 +158,10 @@ var TuiController = class {
     theme: "dark",
     themeSource: "fallback",
     permission: { preset: null, sandbox: null, approval: null },
-    permissionPreset: "default"
+    permissionPreset: "default",
+    usage: EMPTY_USAGE,
+    contextWindow: void 0,
+    skills: []
   };
   listeners = /* @__PURE__ */ new Set();
   agent;
@@ -121,6 +211,11 @@ var TuiController = class {
       themeSource: theme.source
     });
   }
+  setContextWindow(contextWindow) {
+    this.update({
+      contextWindow: typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : void 0
+    });
+  }
   loadHistory(events) {
     if (events.length === 0) return;
     this.historyItems = [...this.state.items];
@@ -150,6 +245,15 @@ var TuiController = class {
         const text = messageText(data);
         if (source?.kind === "user" && text !== "") {
           this.append({ id: `event-${event.seq}`, kind: "user", text });
+        } else if (source?.kind === "skill-invocation") {
+          const skillName = typeof source.name === "string" ? source.name : "unknown";
+          this.append({
+            id: `skill-${event.seq}`,
+            kind: "system",
+            text: `\u25C7 skill "${skillName}" loaded`
+          });
+        } else if (source?.kind === "skill-catalog") {
+          this.update({ skills: skillEntries(source.entries) });
         }
         break;
       }
@@ -165,20 +269,25 @@ var TuiController = class {
       case "assistant/message": {
         const text = messageText(data.message);
         const finalText = text || this.state.streamingText;
+        const patch = {
+          streamingText: "",
+          reasoningText: "",
+          usage: addUsage(this.state.usage, data.usage)
+        };
         if (finalText !== "") {
           this.append(
             { id: `event-${event.seq}`, kind: "assistant", text: finalText },
-            { streamingText: "", reasoningText: "" }
+            patch
           );
         } else {
-          this.update({ streamingText: "", reasoningText: "" });
+          this.update(patch);
         }
         break;
       }
       case "tool/call": {
         const callId = String(data.callId ?? event.seq);
         const toolName = String(data.name ?? "tool");
-        const detail = typeof data.arguments === "string" ? truncate(data.arguments) : "";
+        const detail = toolDetail(toolName, data.arguments);
         const item = {
           id: `tool-${callId}`,
           kind: "tool",
@@ -202,7 +311,7 @@ var TuiController = class {
           id,
           kind: "tool",
           name: pending.name,
-          detail: resultText || pending.detail,
+          detail: pending.name === "skill" ? pending.detail : resultText || pending.detail,
           status: failed ? "error" : "done"
         };
         this.append(completed, {
@@ -281,7 +390,7 @@ var TuiController = class {
       this.append({
         id: `help-${Date.now()}`,
         kind: "system",
-        text: "/help  /status  /cancel  /quit \xB7 Enter while running steers the current turn \xB7 Ctrl+C cancels, then exits when idle"
+        text: "/help  /status  /permission  /skills  /cancel  /quit \xB7 use /skill-name to load a skill \xB7 plugin tools appear as tool rows \xB7 Enter while running steers \xB7 Ctrl+C cancels, then exits when idle"
       });
       return;
     }
@@ -289,16 +398,21 @@ var TuiController = class {
       const permission = this.currentPreset();
       const sandbox = this.state.permission.sandbox ?? "default";
       const approval = this.state.permission.approval ?? "default";
+      const usage = this.state.usage;
       this.append({
         id: `status-${Date.now()}`,
         kind: "system",
-        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 theme ${this.state.theme} (${this.state.themeSource}) \xB7 permission ${permission} \xB7 sandbox ${sandbox} \xB7 approval ${approval}`
+        text: `session ${this.state.sessionId ?? "starting"} \xB7 ${this.state.model ?? "model pending"} \xB7 ${this.state.status} \xB7 theme ${this.state.theme} (${this.state.themeSource}) \xB7 permission ${permission} \xB7 sandbox ${sandbox} \xB7 approval ${approval} \xB7 tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} \xB7 ${contextUsageLabel(usage, this.state.contextWindow)} \xB7 skills ${this.state.skills.length}`
       });
       return;
     }
     if (text === "/permission" || text.startsWith("/permission ")) {
       const raw = text.slice("/permission".length).trim();
       void this.permissionCommand(raw);
+      return;
+    }
+    if (text === "/skills") {
+      void this.skillsCommand();
       return;
     }
     if (this.agent === void 0) return;
@@ -377,6 +491,36 @@ var TuiController = class {
       return;
     }
     await this.confirmAndSwitch(name2);
+  }
+  async skillsCommand() {
+    const skills = this.deps.skills;
+    if (skills === void 0) {
+      this.update({ notice: "/skills unavailable (skills service missing)" });
+      return;
+    }
+    const signal = new AbortController().signal;
+    this.update({ notice: "Loading skills\u2026" });
+    try {
+      const entries = await skills.list(signal);
+      if (entries.length === 0) {
+        this.append({ id: `skills-${Date.now()}`, kind: "system", text: "No skills available" }, {
+          skills: [],
+          notice: void 0
+        });
+        return;
+      }
+      entries.forEach((entry, index) => {
+        this.append({
+          id: `skills-${Date.now()}-${index}`,
+          kind: "system",
+          text: `${entry.name} \u2014 ${entry.description}`
+        }, index === entries.length - 1 ? { skills: entries, notice: void 0 } : {});
+      });
+    } catch (error) {
+      this.update({
+        notice: `/skills unavailable: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
   }
   async permissionPicker(names) {
     const decorated = names.map((name3, index2) => `${index2 + 1} ${permissionLabel(name3)}`);
@@ -465,6 +609,13 @@ var TuiController = class {
     }
     return selected.length > 0 ? { id: question.id, selected } : { id: question.id, selected: [], custom: raw.trim() };
   }
+};
+var internals = {
+  contentText,
+  messageText,
+  truncate,
+  normalizeAnswer,
+  completionPreview
 };
 
 // src/theme.ts
@@ -669,29 +820,79 @@ function App({ controller }) {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot);
   const palette = themePalettes[state.theme];
   const [value, setValue] = useState("");
+  const completionCycle = useRef(void 0);
+  const prompt = state.interaction;
   useInput((input, key) => {
-    if (key.ctrl && input === "c") controller.cancelOrExit();
+    if (key.ctrl && input === "c") {
+      controller.cancelOrExit();
+      return;
+    }
+    if (!key.tab || prompt !== void 0) return;
+    const active = completionCycle.current;
+    if (active !== void 0 && active.renderedValue === value) {
+      const index = (active.index + 1) % active.candidates.length;
+      const renderedValue2 = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? "");
+      completionCycle.current = { ...active, index, renderedValue: renderedValue2 };
+      setValue(renderedValue2);
+      return;
+    }
+    const match = completionCandidates(value, state.skills);
+    if (match === void 0) return;
+    const renderedValue = applyCompletion(value, match, match.candidates[0] ?? "");
+    completionCycle.current = {
+      baseValue: value,
+      match,
+      candidates: match.candidates,
+      index: 0,
+      renderedValue
+    };
+    setValue(renderedValue);
   });
   const submit = (text) => {
+    completionCycle.current = void 0;
     controller.submit(text);
     setValue("");
   };
-  const prompt = state.interaction;
+  const changeValue = (next) => {
+    completionCycle.current = void 0;
+    setValue(next);
+  };
+  const activeCompletion = completionCycle.current?.renderedValue === value ? completionCycle.current : void 0;
+  const pendingCompletion = prompt === void 0 ? completionCandidates(value, state.skills) : void 0;
+  const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? [];
+  const selectedCompletion = activeCompletion?.candidates[activeCompletion.index];
+  const completionPreview2 = internals.completionPreview(completionOptions, selectedCompletion);
   const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : prompt.kind === "permission" || prompt.kind === "permission-confirm" ? "permission \u203A " : "answer \u203A ";
   const preset = state.permissionPreset;
   const fullAccess = preset === "danger-full-access";
+  const sandbox = state.permission.sandbox ?? "default";
+  const approval = state.permission.approval ?? "default";
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsx(Box, { borderStyle: "round", borderColor: palette.border, paddingX: 1, children: /* @__PURE__ */ jsxs(Text, { children: [
-      /* @__PURE__ */ jsx(Text, { bold: true, color: palette.brand, children: "dsh-tui" }),
-      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-        " \xB7 ",
-        state.title,
-        " \xB7 ",
-        state.model ?? "loading",
-        " \xB7 ",
-        state.status
+    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: palette.border, paddingX: 1, children: [
+      /* @__PURE__ */ jsxs(Text, { children: [
+        /* @__PURE__ */ jsx(Text, { bold: true, color: palette.brand, children: "dsh-tui" }),
+        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+          " \xB7 ",
+          state.title,
+          " \xB7 ",
+          state.model ?? "loading",
+          " \xB7 ",
+          state.status
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxs(Text, { children: [
+        /* @__PURE__ */ jsx(Text, { color: palette.muted, children: "\u2699 " }),
+        /* @__PURE__ */ jsx(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: permissionLabel(preset) }),
+        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+          " \xB7 sandbox ",
+          sandbox,
+          " \xB7 approval ",
+          approval,
+          " \xB7 ",
+          contextUsageLabel(state.usage, state.contextWindow)
+        ] })
       ] })
-    ] }) }),
+    ] }),
     /* @__PURE__ */ jsx(Static, { items: state.items, children: (item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id) }),
     state.activeTools.map((item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id)),
     state.reasoningText === "" ? null : /* @__PURE__ */ jsx(Box, { marginTop: 1, children: /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
@@ -711,15 +912,15 @@ function App({ controller }) {
       ] })
     ] }),
     state.notice === void 0 ? null : /* @__PURE__ */ jsx(Text, { color: palette.muted, children: state.notice }),
+    prompt !== void 0 || completionOptions.length === 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+      "\u21E5 ",
+      completionPreview2
+    ] }),
     /* @__PURE__ */ jsxs(Box, { marginTop: 1, children: [
       /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
-      /* @__PURE__ */ jsx(TextInput, { value, onChange: setValue, onSubmit: submit })
+      /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit })
     ] }),
     /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-      preset === "default" ? null : /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
-        permissionLabel(preset),
-        " \xB7 "
-      ] }),
       "Ctrl+C ",
       state.status === "running" ? "cancel" : "exit",
       " \xB7 /help"
@@ -869,6 +1070,8 @@ async function run(ctx, config) {
   const sessions = ctx.get("sessions");
   const persistence = ctx.get("sessionPersistence");
   const userQuestions = ctx.get("userQuestions");
+  const skills = ctx.get("skills");
+  const llm = ctx.get("llm");
   const appExit = ctx.get("appExit");
   if (agents === void 0 || defaultModel === void 0 || sessions === void 0 || persistence === void 0 || userQuestions === void 0 || appExit === void 0) return;
   let ink;
@@ -890,6 +1093,19 @@ async function run(ctx, config) {
     ...commands === void 0 ? {} : {
       commands: {
         execute: (agent, line, signal) => commands.execute(agent, line, signal)
+      }
+    },
+    ...skills === void 0 ? {} : {
+      skills: {
+        list: async (signal) => {
+          if (handle === void 0) return [];
+          const summaries = await skills.list({
+            cwd: process.cwd(),
+            signal,
+            scope: handle.agent
+          });
+          return summaries.filter((skill) => skill.invocation.userInvocable).map((skill) => ({ name: skill.name, description: skill.description }));
+        }
       }
     }
   });
@@ -932,6 +1148,11 @@ async function run(ctx, config) {
   await handle.agent.whenIdle();
   controller.loadHistory(handle.agent.session.events);
   controller.bindAgent(handle.agent);
+  try {
+    const modelInfo = await llm?.resolveModelInfo(selection.provider, selection.model);
+    controller.setContextWindow(modelInfo?.context?.contextWindow);
+  } catch {
+  }
   const disposeStatus = handle.agent.ctx.on("agent/status", ({ agent, status }) => {
     if (agent === handle?.agent) controller.setStatus(status);
   });

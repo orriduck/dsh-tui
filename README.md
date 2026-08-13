@@ -4,7 +4,7 @@ A small terminal UI for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 
 It is intentionally optimized for one-person daily use: start in the current directory, chat immediately, close the terminal, and continue the same workspace later.
 
-![dsh-tui running in a terminal](docs/assets/dsh-tui.png)
+![dsh-tui workspace session showing permission and context usage](docs/assets/dsh-tui-session.png)
 
 ## Quick start
 
@@ -53,9 +53,20 @@ Inside the UI:
 
 - Enter sends a follow-up; while the agent is running, it steers the current turn.
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
-- `/status`, `/permission`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
+- `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
-- The bottom bar shows the current permission preset (Read only / Workspace write / FULL ACCESS), and `/permission` switches it for this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- The header always shows the current permission preset, sandbox/approval policy, and accumulated context usage. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills offer Tab completion.
+
+## Interface states
+
+Slash completion combines built-in commands with the current DSH skill catalog:
+
+![dsh-tui showing skill and slash-command completion](docs/assets/dsh-tui-completion.png)
+
+Full access is deliberately conspicuous after its typed confirmation:
+
+![dsh-tui showing the Full Access permission warning state](docs/assets/dsh-tui-full-access.png)
 
 ## Herdr integration
 
@@ -96,7 +107,7 @@ Run `/status` inside the TUI to see the resolved theme and where it came from.
 
 This package never reads or stores a DeepSeek key itself. It uses the normal DSH credential chain, including `~/.dsh/.credentials.yaml` and supported environment variables.
 
-The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset is always visible in the bottom bar, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
+The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset and underlying sandbox/approval values are always visible in the header, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
 
 ## Scope
 
@@ -106,6 +117,8 @@ Included in the first release:
 - tool activity and results
 - interactive approvals and questions
 - a persistent permission badge with `/permission` switching (idle-only, full-access confirmation)
+- context-window usage and token totals
+- skill discovery, direct invocation visibility, and Tab completion
 - durable sessions and current-directory continuation
 - one-command profile bootstrap
 - automatic Herdr lifecycle reporting when available

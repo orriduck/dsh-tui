@@ -4,6 +4,7 @@ import { installModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
+import type { SkillSummary } from '@deepseek-ai/dsh-skill'
 import type { ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -50,6 +51,8 @@ async function run(ctx: Context, config: Config): Promise<void> {
   const sessions = ctx.get('sessions')
   const persistence = ctx.get('sessionPersistence')
   const userQuestions = ctx.get('userQuestions')
+  const skills = ctx.get('skills')
+  const llm = ctx.get('llm')
   const appExit = ctx.get('appExit')
   if (agents === undefined || defaultModel === undefined || sessions === undefined
       || persistence === undefined || userQuestions === undefined || appExit === undefined) return
@@ -73,6 +76,21 @@ async function run(ctx: Context, config: Config): Promise<void> {
     ...(commands === undefined ? {} : {
       commands: {
         execute: (agent, line, signal) => commands.execute(agent, line, signal),
+      },
+    }),
+    ...(skills === undefined ? {} : {
+      skills: {
+        list: async (signal) => {
+          if (handle === undefined) return []
+          const summaries: SkillSummary[] = await skills.list({
+            cwd: process.cwd(),
+            signal,
+            scope: handle.agent,
+          })
+          return summaries
+            .filter(skill => skill.invocation.userInvocable)
+            .map(skill => ({ name: skill.name, description: skill.description }))
+        },
       },
     }),
   })
@@ -120,6 +138,12 @@ async function run(ctx: Context, config: Config): Promise<void> {
   await handle.agent.whenIdle()
   controller.loadHistory(handle.agent.session.events)
   controller.bindAgent(handle.agent)
+  try {
+    const modelInfo = await llm?.resolveModelInfo(selection.provider, selection.model)
+    controller.setContextWindow(modelInfo?.context?.contextWindow)
+  } catch {
+    // Model metadata is optional; usage remains useful without a known context window.
+  }
 
   const disposeStatus = handle.agent.ctx.on('agent/status', ({ agent, status }) => {
     if (agent === handle?.agent) controller.setStatus(status)

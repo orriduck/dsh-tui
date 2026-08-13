@@ -1,8 +1,15 @@
-import React, { useState, useSyncExternalStore } from 'react'
+import React, { useRef, useState, useSyncExternalStore } from 'react'
 import { Box, Static, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import type { TranscriptItem } from './controller.js'
-import { TuiController, permissionLabel } from './controller.js'
+import {
+  applyCompletion,
+  completionCandidates,
+  contextUsageLabel,
+  internals,
+  TuiController,
+  permissionLabel,
+} from './controller.js'
 import type { ThemePalette } from './theme.js'
 import { themePalettes } from './theme.js'
 
@@ -30,17 +37,61 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot)
   const palette = themePalettes[state.theme]
   const [value, setValue] = useState('')
+  const completionCycle = useRef<{
+    baseValue: string
+    match: { start: number; end: number }
+    candidates: string[]
+    index: number
+    renderedValue: string
+  } | undefined>(undefined)
+
+  const prompt = state.interaction
 
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') controller.cancelOrExit()
+    if (key.ctrl && input === 'c') {
+      controller.cancelOrExit()
+      return
+    }
+    if (!key.tab || prompt !== undefined) return
+    const active = completionCycle.current
+    if (active !== undefined && active.renderedValue === value) {
+      const index = (active.index + 1) % active.candidates.length
+      const renderedValue = applyCompletion(active.baseValue, active.match, active.candidates[index] ?? '')
+      completionCycle.current = { ...active, index, renderedValue }
+      setValue(renderedValue)
+      return
+    }
+    const match = completionCandidates(value, state.skills)
+    if (match === undefined) return
+    const renderedValue = applyCompletion(value, match, match.candidates[0] ?? '')
+    completionCycle.current = {
+      baseValue: value,
+      match,
+      candidates: match.candidates,
+      index: 0,
+      renderedValue,
+    }
+    setValue(renderedValue)
   })
 
   const submit = (text: string): void => {
+    completionCycle.current = undefined
     controller.submit(text)
     setValue('')
   }
 
-  const prompt = state.interaction
+  const changeValue = (next: string): void => {
+    completionCycle.current = undefined
+    setValue(next)
+  }
+
+  const activeCompletion = completionCycle.current?.renderedValue === value
+    ? completionCycle.current
+    : undefined
+  const pendingCompletion = prompt === undefined ? completionCandidates(value, state.skills) : undefined
+  const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? []
+  const selectedCompletion = activeCompletion?.candidates[activeCompletion.index]
+  const completionPreview = internals.completionPreview(completionOptions, selectedCompletion)
   const promptLabel = prompt === undefined
     ? state.status === 'running' ? 'steer › ' : 'you › '
     : prompt.kind === 'approval' ? 'allow › '
@@ -49,13 +100,25 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
 
   const preset = state.permissionPreset
   const fullAccess = preset === 'danger-full-access'
+  const sandbox = state.permission.sandbox ?? 'default'
+  const approval = state.permission.approval ?? 'default'
 
   return (
     <Box flexDirection="column">
-      <Box borderStyle="round" borderColor={palette.border} paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={palette.border} paddingX={1}>
         <Text>
           <Text bold color={palette.brand}>dsh-tui</Text>
           <Text color={palette.muted}> · {state.title} · {state.model ?? 'loading'} · {state.status}</Text>
+        </Text>
+        <Text>
+          <Text color={palette.muted}>⚙ </Text>
+          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+            {permissionLabel(preset)}
+          </Text>
+          <Text color={palette.muted}>
+            {' · sandbox '}{sandbox}{' · approval '}{approval}{' · '}
+            {contextUsageLabel(state.usage, state.contextWindow)}
+          </Text>
         </Text>
       </Box>
 
@@ -83,18 +146,14 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
       )}
 
       {state.notice === undefined ? null : <Text color={palette.muted}>{state.notice}</Text>}
+      {prompt !== undefined || completionOptions.length === 0 ? null : (
+        <Text color={palette.muted}>⇥ {completionPreview}</Text>
+      )}
       <Box marginTop={1}>
         <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
-        <TextInput value={value} onChange={setValue} onSubmit={submit} />
+        <TextInput value={value} onChange={changeValue} onSubmit={submit} />
       </Box>
-      <Text color={palette.muted}>
-        {preset === 'default' ? null : (
-          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
-            {permissionLabel(preset)}{' · '}
-          </Text>
-        )}
-        {'Ctrl+C '}{state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
-      </Text>
+      <Text color={palette.muted}>Ctrl+C {state.status === 'running' ? 'cancel' : 'exit'} · /help</Text>
     </Box>
   )
 }

@@ -1,5 +1,5 @@
 import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type TokenUsage } from '@deepseek-ai/dsh-llm'
 import { applyKnobEvent, type KnobState } from '@deepseek-ai/dsh-permission-presets'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
@@ -26,13 +26,29 @@ export interface PermissionState {
   approval: string | null
 }
 
-/** Optional host services used by the permission surfaces; absent → the UI degrades gracefully. */
-export interface PermissionDeps {
+export interface UsageState {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  reasoningTokens: number
+}
+
+export interface SkillEntry {
+  name: string
+  description: string
+}
+
+/** Optional host services used by command surfaces; absent services degrade gracefully. */
+export interface ControllerDeps {
   permissionPresets?: {
     names: readonly string[]
   }
   commands?: {
     execute: (agent: Agent, line: string, signal: AbortSignal) => Promise<unknown>
+  }
+  skills?: {
+    list: (signal: AbortSignal) => Promise<SkillEntry[]>
   }
 }
 
@@ -47,6 +63,13 @@ export function permissionLabel(name: string): string {
 }
 
 const EMPTY_KNOBS: KnobState = { preset: null, sandbox: null, approval: null }
+const EMPTY_USAGE: UsageState = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0,
+}
 
 export type TranscriptItem =
   | { id: string; kind: 'user'; text: string }
@@ -78,6 +101,9 @@ interface TuiState {
   permission: PermissionState
   /** Display preset: last selected, derived `custom`, or `default` before any override. */
   permissionPreset: string
+  usage: UsageState
+  contextWindow: number | undefined
+  skills: SkillEntry[]
 }
 
 type Listener = () => void
@@ -112,6 +138,122 @@ function normalizeAnswer(input: string): string {
   return input.trim().toLocaleLowerCase()
 }
 
+function usageValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
+}
+
+function addUsage(current: UsageState, value: unknown): UsageState {
+  if (value === null || typeof value !== 'object') return current
+  const usage = value as Partial<TokenUsage>
+  return {
+    inputTokens: current.inputTokens + usageValue(usage.inputTokens),
+    outputTokens: current.outputTokens + usageValue(usage.outputTokens),
+    cacheReadTokens: current.cacheReadTokens + usageValue(usage.cacheReadTokens),
+    cacheWriteTokens: current.cacheWriteTokens + usageValue(usage.cacheWriteTokens),
+    reasoningTokens: current.reasoningTokens + usageValue(usage.reasoningTokens),
+  }
+}
+
+function formatTokens(value: number): string {
+  if (value < 1_000) return String(value)
+  const compact = value / 1_000
+  return `${compact >= 100 || Number.isInteger(compact) ? compact.toFixed(0) : compact.toFixed(1)}k`
+}
+
+function contextTokens(usage: UsageState): number {
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+}
+
+export function contextUsageLabel(usage: UsageState, contextWindow?: number): string {
+  const used = contextTokens(usage)
+  if (contextWindow === undefined || contextWindow <= 0) return `ctx ${formatTokens(used)}`
+  const percentage = Math.round((used / contextWindow) * 100)
+  return `ctx ${formatTokens(used)}/${formatTokens(contextWindow)} (${percentage}%)`
+}
+
+function skillEntries(value: unknown): SkillEntry[] {
+  if (!Array.isArray(value)) return []
+  const entries: SkillEntry[] = []
+  for (const item of value) {
+    if (item === null || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    if (typeof record.name !== 'string' || typeof record.description !== 'string') continue
+    entries.push({ name: record.name, description: record.description })
+  }
+  return entries
+}
+
+function toolDetail(name: string, rawArguments: unknown): string {
+  if (typeof rawArguments !== 'string') return ''
+  if (name === 'skill') {
+    try {
+      const parsed = JSON.parse(rawArguments) as Record<string, unknown>
+      if (typeof parsed.name === 'string') return truncate(parsed.name)
+    } catch {
+      // Fall through to the bounded raw arguments for malformed tool input.
+    }
+  }
+  return truncate(rawArguments)
+}
+
+const BUILTIN_COMMANDS = ['help', 'status', 'cancel', 'quit', 'exit', 'permission', 'skills'] as const
+
+interface CompletionMatch {
+  start: number
+  end: number
+  candidates: string[]
+}
+
+export function completionCandidates(
+  input: string,
+  skills: readonly Pick<SkillEntry, 'name'>[],
+): CompletionMatch | undefined {
+  const match = /(?:^|\s)(\/[a-z0-9-]*)$/.exec(input)
+  const token = match?.[1]
+  if (token === undefined) return undefined
+  const builtIns = BUILTIN_COMMANDS
+    .map(command => `/${command}`)
+    .filter(candidate => candidate.startsWith(token))
+    .sort((left, right) => left.localeCompare(right))
+  const builtInSet: ReadonlySet<string> = new Set(BUILTIN_COMMANDS.map(command => `/${command}`))
+  const skillCandidates = [...new Set(skills.map(skill => `/${skill.name}`))]
+    .filter(candidate => candidate.startsWith(token) && !builtInSet.has(candidate))
+    .sort((left, right) => left.localeCompare(right))
+  const candidates = [...builtIns, ...skillCandidates]
+  if (candidates.length === 0) return undefined
+  return {
+    start: input.length - token.length,
+    end: input.length,
+    candidates,
+  }
+}
+
+export function applyCompletion(
+  input: string,
+  match: Pick<CompletionMatch, 'start' | 'end'>,
+  candidate: string,
+): string {
+  return `${input.slice(0, match.start)}${candidate}${input.slice(match.end)}`
+}
+
+function completionPreview(
+  candidates: readonly string[],
+  selected?: string,
+  maxLength = 44,
+): string {
+  const ordered = selected === undefined
+    ? [...candidates]
+    : [selected, ...candidates.filter(candidate => candidate !== selected)]
+  const shown: string[] = []
+  for (const candidate of ordered) {
+    const next = [...shown, candidate].join(' · ')
+    const hasMore = shown.length + 1 < ordered.length
+    if (shown.length > 0 && `${next}${hasMore ? ' · …' : ''}`.length > maxLength) break
+    shown.push(candidate)
+  }
+  return `${shown.join(' · ')}${shown.length < ordered.length ? ' · …' : ''}`
+}
+
 export class TuiController {
   private state: TuiState = {
     items: [],
@@ -128,6 +270,9 @@ export class TuiController {
     themeSource: 'fallback',
     permission: { preset: null, sandbox: null, approval: null },
     permissionPreset: 'default',
+    usage: EMPTY_USAGE,
+    contextWindow: undefined,
+    skills: [],
   }
   private readonly listeners = new Set<Listener>()
   private agent: Agent | undefined
@@ -139,7 +284,7 @@ export class TuiController {
 
   constructor(
     private readonly onExit: () => Promise<void>,
-    private readonly deps: PermissionDeps = {},
+    private readonly deps: ControllerDeps = {},
   ) {}
 
   readonly subscribe = (listener: Listener): (() => void) => {
@@ -191,6 +336,14 @@ export class TuiController {
     })
   }
 
+  setContextWindow(contextWindow: number | undefined): void {
+    this.update({
+      contextWindow: typeof contextWindow === 'number' && Number.isFinite(contextWindow) && contextWindow > 0
+        ? contextWindow
+        : undefined,
+    })
+  }
+
   loadHistory(events: readonly SessionEvent[]): void {
     if (events.length === 0) return
     this.historyItems = [...this.state.items]
@@ -221,6 +374,15 @@ export class TuiController {
         const text = messageText(data)
         if (source?.kind === 'user' && text !== '') {
           this.append({ id: `event-${event.seq}`, kind: 'user', text })
+        } else if (source?.kind === 'skill-invocation') {
+          const skillName = typeof source.name === 'string' ? source.name : 'unknown'
+          this.append({
+            id: `skill-${event.seq}`,
+            kind: 'system',
+            text: `◇ skill "${skillName}" loaded`,
+          })
+        } else if (source?.kind === 'skill-catalog') {
+          this.update({ skills: skillEntries(source.entries) })
         }
         break
       }
@@ -236,20 +398,25 @@ export class TuiController {
       case 'assistant/message': {
         const text = messageText(data.message)
         const finalText = text || this.state.streamingText
+        const patch = {
+          streamingText: '',
+          reasoningText: '',
+          usage: addUsage(this.state.usage, data.usage),
+        }
         if (finalText !== '') {
           this.append(
             { id: `event-${event.seq}`, kind: 'assistant', text: finalText },
-            { streamingText: '', reasoningText: '' },
+            patch,
           )
         } else {
-          this.update({ streamingText: '', reasoningText: '' })
+          this.update(patch)
         }
         break
       }
       case 'tool/call': {
         const callId = String(data.callId ?? event.seq)
         const toolName = String(data.name ?? 'tool')
-        const detail = typeof data.arguments === 'string' ? truncate(data.arguments) : ''
+        const detail = toolDetail(toolName, data.arguments)
         const item: ToolTranscriptItem = {
           id: `tool-${callId}`,
           kind: 'tool',
@@ -273,7 +440,7 @@ export class TuiController {
           id,
           kind: 'tool',
           name: pending.name,
-          detail: resultText || pending.detail,
+          detail: pending.name === 'skill' ? pending.detail : resultText || pending.detail,
           status: failed ? 'error' : 'done',
         }
         this.append(completed, {
@@ -357,7 +524,7 @@ export class TuiController {
       this.append({
         id: `help-${Date.now()}`,
         kind: 'system',
-        text: '/help  /status  /cancel  /quit · Enter while running steers the current turn · Ctrl+C cancels, then exits when idle',
+        text: '/help  /status  /permission  /skills  /cancel  /quit · use /skill-name to load a skill · plugin tools appear as tool rows · Enter while running steers · Ctrl+C cancels, then exits when idle',
       })
       return
     }
@@ -365,16 +532,21 @@ export class TuiController {
       const permission = this.currentPreset()
       const sandbox = this.state.permission.sandbox ?? 'default'
       const approval = this.state.permission.approval ?? 'default'
+      const usage = this.state.usage
       this.append({
         id: `status-${Date.now()}`,
         kind: 'system',
-        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource}) · permission ${permission} · sandbox ${sandbox} · approval ${approval}`,
+        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource}) · permission ${permission} · sandbox ${sandbox} · approval ${approval} · tokens in ${formatTokens(usage.inputTokens)} / out ${formatTokens(usage.outputTokens)} · ${contextUsageLabel(usage, this.state.contextWindow)} · skills ${this.state.skills.length}`,
       })
       return
     }
     if (text === '/permission' || text.startsWith('/permission ')) {
       const raw = text.slice('/permission'.length).trim()
       void this.permissionCommand(raw)
+      return
+    }
+    if (text === '/skills') {
+      void this.skillsCommand()
       return
     }
     if (this.agent === undefined) return
@@ -459,6 +631,37 @@ export class TuiController {
       return
     }
     await this.confirmAndSwitch(name)
+  }
+
+  private async skillsCommand(): Promise<void> {
+    const skills = this.deps.skills
+    if (skills === undefined) {
+      this.update({ notice: '/skills unavailable (skills service missing)' })
+      return
+    }
+    const signal = new AbortController().signal
+    this.update({ notice: 'Loading skills…' })
+    try {
+      const entries = await skills.list(signal)
+      if (entries.length === 0) {
+        this.append({ id: `skills-${Date.now()}`, kind: 'system', text: 'No skills available' }, {
+          skills: [],
+          notice: undefined,
+        })
+        return
+      }
+      entries.forEach((entry, index) => {
+        this.append({
+          id: `skills-${Date.now()}-${index}`,
+          kind: 'system',
+          text: `${entry.name} — ${entry.description}`,
+        }, index === entries.length - 1 ? { skills: entries, notice: undefined } : {})
+      })
+    } catch (error) {
+      this.update({
+        notice: `/skills unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
   }
 
   private async permissionPicker(names: readonly string[]): Promise<void> {
@@ -556,4 +759,10 @@ export class TuiController {
   }
 }
 
-export const internals = { contentText, messageText, truncate, normalizeAnswer }
+export const internals = {
+  contentText,
+  messageText,
+  truncate,
+  normalizeAnswer,
+  completionPreview,
+}

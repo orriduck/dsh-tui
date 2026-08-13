@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { TuiController, internals, permissionLabel } from '../src/controller.js'
+import {
+  applyCompletion,
+  completionCandidates,
+  TuiController,
+  internals,
+  permissionLabel,
+} from '../src/controller.js'
 
 function event(type: string, seq: number, data: Record<string, unknown>): SessionEvent {
   return { type, seq, time: seq, data } as SessionEvent
@@ -68,6 +74,62 @@ describe('terminal projection', () => {
     })
   })
 
+  it('accumulates durable assistant usage across messages', () => {
+    const controller = new TuiController(async () => {})
+    controller.ingest(event('assistant/message', 1, {
+      message: { content: [{ type: 'text', text: 'one' }] },
+      usage: {
+        inputTokens: 10_000,
+        outputTokens: 2_000,
+        cacheReadTokens: 300,
+        cacheWriteTokens: 40,
+        reasoningTokens: 500,
+      },
+    }))
+    controller.ingest(event('assistant/message', 2, {
+      message: { content: [{ type: 'text', text: 'two' }] },
+      usage: { inputTokens: 2_000, outputTokens: 100 },
+    }))
+
+    expect(controller.snapshot().usage).toEqual({
+      inputTokens: 12_000,
+      outputTokens: 2_100,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 40,
+      reasoningTokens: 500,
+    })
+  })
+
+  it('projects skill catalog and invocation metadata without exposing injected content', () => {
+    const controller = new TuiController(async () => {})
+    controller.ingest(event('user/message', 1, {
+      role: 'user',
+      source: {
+        kind: 'skill-catalog',
+        entries: [
+          { name: 'brainstorming', description: 'Explore approaches first.' },
+          { name: 'audit', description: 'Inspect a repository.' },
+        ],
+      },
+      content: [{ type: 'text', text: '<available_skills>hidden catalog</available_skills>' }],
+    }))
+    controller.ingest(event('user/message', 2, {
+      role: 'user',
+      source: { kind: 'skill-invocation', name: 'brainstorming' },
+      content: [{ type: 'text', text: '<skill_content>hidden instructions</skill_content>' }],
+    }))
+
+    expect(controller.snapshot().skills).toEqual([
+      { name: 'brainstorming', description: 'Explore approaches first.' },
+      { name: 'audit', description: 'Inspect a repository.' },
+    ])
+    expect(controller.snapshot().items).toEqual([{
+      id: 'skill-2',
+      kind: 'system',
+      text: '◇ skill "brainstorming" loaded',
+    }])
+  })
+
   it('updates a tool row when its result arrives', () => {
     const controller = new TuiController(async () => {})
     controller.ingest(event('tool/call', 1, {
@@ -102,6 +164,43 @@ describe('terminal projection', () => {
       kind: 'tool',
       name: 'bash',
       detail: '/tmp/project',
+      status: 'done',
+    })
+  })
+
+  it('shows the selected skill name instead of raw tool JSON', () => {
+    const controller = new TuiController(async () => {})
+    controller.ingest(event('tool/call', 1, {
+      callId: 'call-skill',
+      name: 'skill',
+      arguments: '{"name":"brainstorming"}',
+    }))
+
+    expect(controller.snapshot().activeTools).toContainEqual({
+      id: 'tool-call-skill',
+      kind: 'tool',
+      name: 'skill',
+      detail: 'brainstorming',
+      status: 'running',
+    })
+
+    controller.ingest(event('tool/result', 2, {
+      message: {
+        source: { kind: 'tool', callId: 'call-skill' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-skill',
+          isError: false,
+          content: [{ type: 'text', text: '<skill_content name="brainstorming">long body</skill_content>' }],
+        }],
+      },
+    }))
+
+    expect(controller.snapshot().items).toContainEqual({
+      id: 'tool-call-skill',
+      kind: 'tool',
+      name: 'skill',
+      detail: 'brainstorming',
       status: 'done',
     })
   })
@@ -161,6 +260,31 @@ describe('input helpers', () => {
     await expect(question).resolves.toEqual({
       answers: [{ id: 'choice', selected: ['Beta'] }],
     })
+  })
+
+  it('offers command and skill completions for the final slash token', () => {
+    const match = completionCandidates('please use /s', [
+      { name: 'shadow-mode' },
+      { name: 'status-helper' },
+      { name: 'skills' },
+    ])
+    expect(match).toEqual({
+      start: 11,
+      end: 13,
+      candidates: ['/skills', '/status', '/shadow-mode', '/status-helper'],
+    })
+    expect(match === undefined ? undefined : applyCompletion('please use /s', match, '/status-helper'))
+      .toBe('please use /status-helper')
+    expect(completionCandidates('/skill already', [])).toBeUndefined()
+
+    const preview = (internals as unknown as {
+      completionPreview?: (candidates: readonly string[], selected?: string, maxLength?: number) => string
+    }).completionPreview
+    expect(preview).toBeTypeOf('function')
+    expect(preview?.(['/skills', '/status', '/shadow-mode', '/systematic-debugging'], undefined, 28))
+      .toBe('/skills · /status · …')
+    expect(preview?.(['/skills', '/status', '/systematic-debugging'], '/systematic-debugging', 28))
+      .toBe('/systematic-debugging · …')
   })
 })
 
@@ -307,5 +431,52 @@ describe('permission switching', () => {
     controller.submit('/permission read-only')
     await flush()
     expect(controller.snapshot().notice).toContain('unknown preset')
+  })
+})
+
+describe('skills command', () => {
+  it('lists skills from the injected registry and refreshes completion state', async () => {
+    const list = vi.fn().mockResolvedValue([
+      { name: 'audit', description: 'Inspect a repository.' },
+      { name: 'brainstorming', description: 'Explore approaches first.' },
+    ])
+    const controller = new TuiController(async () => {}, {
+      skills: { list },
+    })
+    controller.bindAgent(idleAgent())
+
+    controller.submit('/skills')
+    await flush()
+
+    expect(list).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(controller.snapshot().skills).toEqual([
+      { name: 'audit', description: 'Inspect a repository.' },
+      { name: 'brainstorming', description: 'Explore approaches first.' },
+    ])
+    expect(controller.snapshot().items.slice(-2)).toEqual([
+      { id: expect.any(String), kind: 'system', text: 'audit — Inspect a repository.' },
+      { id: expect.any(String), kind: 'system', text: 'brainstorming — Explore approaches first.' },
+    ])
+  })
+
+  it('reports usage, context percentage, and skill count in /status', () => {
+    const controller = new TuiController(async () => {})
+    controller.bindAgent(idleAgent())
+    controller.ingest(event('user/message', 1, {
+      source: { kind: 'skill-catalog', entries: [{ name: 'audit', description: 'Inspect.' }] },
+      content: [{ type: 'text', text: 'hidden' }],
+    }))
+    controller.ingest(event('assistant/message', 2, {
+      message: { content: [{ type: 'text', text: 'done' }] },
+      usage: { inputTokens: 10_000, outputTokens: 2_000, cacheReadTokens: 300 },
+    }))
+    controller.setContextWindow(128_000)
+
+    controller.submit('/status')
+
+    const last = controller.snapshot().items.at(-1) as { text: string }
+    expect(last.text).toContain('tokens in 10k / out 2k')
+    expect(last.text).toContain('ctx 12.3k/128k (10%)')
+    expect(last.text).toContain('skills 1')
   })
 })

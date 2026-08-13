@@ -1,6 +1,6 @@
 {
   "name": "dsh-tui",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A small, session-aware terminal UI for DeepSeek Harness",
   "type": "module",
   "bin": {
@@ -71,6 +71,7 @@
     "@deepseek-ai/dsh-permission-presets": "0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6"
   },
@@ -85,6 +86,7 @@
     "@deepseek-ai/dsh-permission-presets": { "optional": true },
     "@deepseek-ai/dsh-session": { "optional": true },
     "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-skill": { "optional": true },
     "@deepseek-ai/dsh-user-approval": { "optional": true },
     "@deepseek-ai/dsh-user-questions": { "optional": true }
   },
@@ -99,6 +101,7 @@
     "@deepseek-ai/dsh-permission-presets": "0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "0.1.0-rc.6",
     "@deepseek-ai/dsh-session-persistence": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-skill": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
     "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
     "@types/node": "^22.19.0",
