@@ -1,0 +1,103 @@
+{
+  "name": "dsh-tui",
+  "version": "0.1.0",
+  "description": "A small, session-aware terminal UI for DeepSeek Harness",
+  "type": "module",
+  "bin": {
+    "dsh-tui": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./startup": {
+      "types": "./dist/startup.d.ts",
+      "default": "./dist/startup.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.15.1",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orriduck/dsh-tui.git"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh-plugin",
+    "tui",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ink": "^7.1.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.0",
+    "@deepseek-ai/dsh-tool-ask-user": "0.1.0-rc.6"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-cmdline": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/cordis-plugin-loader": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-agent-default-model": { "optional": true },
+    "@deepseek-ai/dsh-cmdline": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-user-approval": { "optional": true },
+    "@deepseek-ai/dsh-user-questions": { "optional": true }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-cmdline": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session-persistence": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-questions": "0.1.0-rc.6",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19.2.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
