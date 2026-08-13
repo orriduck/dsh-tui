@@ -3,29 +3,32 @@ import { Box, Static, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import type { TranscriptItem } from './controller.js'
 import { TuiController } from './controller.js'
+import type { ThemePalette } from './theme.js'
+import { themePalettes } from './theme.js'
 
-function TranscriptRow({ item }: { item: TranscriptItem }): React.JSX.Element {
+function TranscriptRow({ item, palette }: { item: TranscriptItem; palette: ThemePalette }): React.JSX.Element {
   if (item.kind === 'user') {
-    return <Box marginTop={1}><Text color="cyan">› </Text><Text>{item.text}</Text></Box>
+    return <Box marginTop={1}><Text color={palette.user}>› </Text><Text>{item.text}</Text></Box>
   }
   if (item.kind === 'assistant') {
-    return <Box marginTop={1}><Text><Text color="green">◆</Text> {item.text}</Text></Box>
+    return <Box marginTop={1}><Text><Text color={palette.success}>◆</Text> {item.text}</Text></Box>
   }
   if (item.kind === 'system') {
-    return <Box><Text dimColor>  {item.text}</Text></Box>
+    return <Box><Text color={palette.muted}>  {item.text}</Text></Box>
   }
   const marker = item.status === 'running' ? '◌' : item.status === 'error' ? '×' : '✓'
-  const color = item.status === 'running' ? 'yellow' : item.status === 'error' ? 'red' : 'gray'
+  const color = item.status === 'running' ? palette.warning : item.status === 'error' ? palette.error : palette.muted
   return (
     <Box>
       <Text color={color}>{marker} {item.name}</Text>
-      {item.detail === '' ? null : <Text dimColor>  {item.detail}</Text>}
+      {item.detail === '' ? null : <Text color={palette.muted}>  {item.detail}</Text>}
     </Box>
   )
 }
 
 export function App({ controller }: { controller: TuiController }): React.JSX.Element {
   const state = useSyncExternalStore(controller.subscribe, controller.snapshot)
+  const palette = themePalettes[state.theme]
   const [value, setValue] = useState('')
 
   useInput((input, key) => {
@@ -44,38 +47,38 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
 
   return (
     <Box flexDirection="column">
-      <Box borderStyle="round" borderColor="gray" paddingX={1}>
+      <Box borderStyle="round" borderColor={palette.border} paddingX={1}>
         <Text>
-          <Text bold color="green">dsh-tui</Text>
-          <Text dimColor> · {state.title} · {state.model ?? 'loading'} · {state.status}</Text>
+          <Text bold color={palette.brand}>dsh-tui</Text>
+          <Text color={palette.muted}> · {state.title} · {state.model ?? 'loading'} · {state.status}</Text>
         </Text>
       </Box>
 
       <Static items={state.items}>
-        {(item) => <TranscriptRow key={item.id} item={item} />}
+        {(item) => <TranscriptRow key={item.id} item={item} palette={palette} />}
       </Static>
 
       {state.reasoningText === '' ? null : (
-        <Box marginTop={1}><Text dimColor>thinking  {state.reasoningText}</Text></Box>
+        <Box marginTop={1}><Text color={palette.muted}>thinking  {state.reasoningText}</Text></Box>
       )}
       {state.streamingText === '' ? null : (
-        <Box marginTop={1}><Text color="green">◆ </Text><Text>{state.streamingText}</Text></Box>
+        <Box marginTop={1}><Text color={palette.success}>◆ </Text><Text>{state.streamingText}</Text></Box>
       )}
 
       {prompt === undefined ? null : (
-        <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor="yellow" paddingX={1}>
-          <Text bold color="yellow">{prompt.title}</Text>
+        <Box marginTop={1} flexDirection="column" borderStyle="single" borderColor={palette.warning} paddingX={1}>
+          <Text bold color={palette.warning}>{prompt.title}</Text>
           {prompt.detail === undefined ? null : <Text>{prompt.detail}</Text>}
-          <Text dimColor>{prompt.options.join('  ·  ')}{prompt.multiSelect === true ? '  (comma separated)' : ''}</Text>
+          <Text color={palette.muted}>{prompt.options.join('  ·  ')}{prompt.multiSelect === true ? '  (comma separated)' : ''}</Text>
         </Box>
       )}
 
-      {state.notice === undefined ? null : <Text dimColor>{state.notice}</Text>}
+      {state.notice === undefined ? null : <Text color={palette.muted}>{state.notice}</Text>}
       <Box marginTop={1}>
-        <Text color={prompt === undefined ? 'cyan' : 'yellow'}>{promptLabel}</Text>
+        <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
         <TextInput value={value} onChange={setValue} onSubmit={submit} />
       </Box>
-      <Text dimColor>Ctrl+C {state.status === 'running' ? 'cancel' : 'exit'} · /help</Text>
+      <Text color={palette.muted}>Ctrl+C {state.status === 'running' ? 'cancel' : 'exit'} · /help</Text>
     </Box>
   )
 }

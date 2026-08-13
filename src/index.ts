@@ -12,6 +12,7 @@ import { render, type Instance } from 'ink'
 import React from 'react'
 import { App } from './app.js'
 import { TuiController } from './controller.js'
+import { resolveTheme } from './theme.js'
 
 export const name = 'dsh-tui'
 export const inject = [
@@ -38,6 +39,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('dsh-tui needs an interactive terminal; use the headless profile for scripts')
   }
+  const theme = await resolveTheme()
   await ctx.get('loader')?.await()
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel')
@@ -59,6 +61,7 @@ async function run(ctx: Context, config: Config): Promise<void> {
     ink?.unmount()
     appExit(0)
   })
+  controller.setTheme(theme)
 
   const disposeQuestions = userQuestions.registerProvider({
     ask: request => controller.askQuestions(request),

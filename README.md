@@ -4,6 +4,24 @@ A small terminal UI for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 
 It is intentionally optimized for one-person daily use: start in the current directory, chat immediately, close the terminal, and continue the same workspace later.
 
+![dsh-tui running in a terminal](docs/assets/dsh-tui.png)
+
+## Quick start
+
+Open a terminal in the project you want DeepSeek to work on:
+
+```bash
+cd /path/to/your/project
+dsh-tui
+```
+
+To continue the newest session for that same project later:
+
+```bash
+cd /path/to/your/project
+dsh-tui -c
+```
+
 ## Install
 
 Requirements: Node.js 22+, `pnpm`, and the official DeepSeek Harness CLI.
@@ -13,9 +31,10 @@ npm install -g @deepseek-ai/dsh
 npm install -g github:orriduck/dsh-tui
 ```
 
-Then run:
+Then enter any project and run:
 
 ```bash
+cd /path/to/your/project
 dsh-tui
 ```
 
@@ -36,6 +55,26 @@ Inside the UI:
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
 - `/status`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
+
+## Appearance
+
+The first launch creates `~/.dsh/tui.json`:
+
+```json
+{
+  "theme": "system"
+}
+```
+
+`system` follows the terminal background automatically. It uses a short terminal color probe first, then `COLORFGBG`, then the macOS appearance setting when needed. Set `theme` to `light` or `dark` to pin it instead.
+
+For a one-off override:
+
+```bash
+DSH_TUI_THEME=dark dsh-tui
+```
+
+Run `/status` inside the TUI to see the resolved theme and where it came from.
 
 ## Credentials and permissions
 

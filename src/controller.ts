@@ -8,6 +8,7 @@ import type {
   AskUserQuestionItem,
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
+import type { ResolvedTheme, ThemePreference, ThemeSource } from './theme.js'
 
 export type TranscriptItem =
   | { id: string; kind: 'user'; text: string }
@@ -33,6 +34,10 @@ export interface TuiState {
   reasoningText: string
   interaction: InteractionPrompt | undefined
   notice: string | undefined
+  theme: ResolvedTheme
+  themePreference: ThemePreference
+  themeSource: ThemeSource
+  themeConfigPath: string | undefined
 }
 
 type Listener = () => void
@@ -78,6 +83,10 @@ export class TuiController {
     reasoningText: '',
     interaction: undefined,
     notice: undefined,
+    theme: 'dark',
+    themePreference: 'system',
+    themeSource: 'fallback',
+    themeConfigPath: undefined,
   }
   private readonly listeners = new Set<Listener>()
   private agent: Agent | undefined
@@ -113,6 +122,20 @@ export class TuiController {
 
   setStatus(status: AgentStatus): void {
     this.update({ status })
+  }
+
+  setTheme(theme: {
+    resolved: ResolvedTheme
+    preference: ThemePreference
+    source: ThemeSource
+    configPath: string
+  }): void {
+    this.update({
+      theme: theme.resolved,
+      themePreference: theme.preference,
+      themeSource: theme.source,
+      themeConfigPath: theme.configPath,
+    })
   }
 
   loadHistory(events: readonly SessionEvent[]): void {
@@ -213,7 +236,7 @@ export class TuiController {
       this.append({
         id: `status-${Date.now()}`,
         kind: 'system',
-        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status}`,
+        text: `session ${this.state.sessionId ?? 'starting'} · ${this.state.model ?? 'model pending'} · ${this.state.status} · theme ${this.state.theme} (${this.state.themeSource})`,
       })
       return
     }
