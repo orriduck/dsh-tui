@@ -57,8 +57,8 @@ Inside the UI:
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
 - `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
-- A continuous neutral composer surface keeps input and its compact two-line status together, with a blank row of breathing room between them. Its background follows the resolved light/dark theme; the status shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
-- `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills offer Tab completion.
+- A near-full-width neutral composer surface holds the input with one row of vertical breathing room. Like Codex, it probes the terminal background and paints an opaque RGB tint equivalent to 4% black on light terminals or 12% white on dark terminals; ANSI has no per-cell alpha. The compact status sits immediately below the surface and shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills appear in a compact, described menu below the composer and offer Tab completion.
 
 ## Interface states
 
@@ -95,7 +95,7 @@ The first launch creates `~/.dsh/tui.json`:
 }
 ```
 
-`system` follows the terminal background automatically. It uses a short terminal color probe first, then `COLORFGBG`, then the macOS appearance setting when needed. Set `theme` to `light` or `dark` to pin it instead.
+`system` follows the terminal background automatically. It uses a short OSC 11 color probe first and retains the returned RGB value to derive the Codex-style composer tint. If exact RGB is unavailable, it falls back through `COLORFGBG`, the macOS appearance setting, and finally dark. Set `theme` to `light` or `dark` to pin it instead.
 
 For a one-off override:
 

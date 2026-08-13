@@ -4,6 +4,14 @@ All notable changes to dsh-tui are documented here. `package.json` is the machin
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Matched the Codex composer treatment: derive an opaque neutral tint from the terminal's exact OSC 11 background, keep the input surface near-full-width, and render compact status immediately below it.
+- Replaced the single-line slash preview with a Codex-style four-row command and skill menu, including descriptions and visible Tab selection.
+- Aligned the compact status with the composer's one-cell content inset.
+
 ## [0.4.1] - 2026-08-13
 
 ### Changed

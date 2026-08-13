@@ -57,8 +57,8 @@ dsh-tui -r <session-id>         # 恢复指定会话
 - `Ctrl+C` 在运行中取消 turn，idle 时保存并退出。
 - 内置 `/status`、`/permission`、`/skills`、`/cancel`、`/help`、`/quit` 和 `/exit`。
 - 工具调用、reasoning、审批和 `ask_user_question` 都直接显示在终端里。
-- 连续中性背景的 composer 将输入和紧凑的两行状态收在同一块面板中，两者之间留出一整行呼吸空间。背景会随 light/dark 主题变化；状态栏显示模型状态、已安装 DSH 版本和累计 context 用量，不重复默认 workspace sandbox。非默认权限仍会显示，Full Access 会重点警示。`/permission` 通过 DSH 官方命令切换当前会话权限；只能在 idle 时切换，Full Access 还必须输入 `FULL ACCESS` 确认。
-- `/skills` 列出用户可调用的 skills。输入 `/skill-name` 可直接加载；slash command 和 skill catalog 支持 Tab 补全。
+- 几乎占满终端宽度的连续中性 composer 收纳输入，并在上下各留一行呼吸空间。与 Codex 一样，它会探测终端实际背景，并在浅色背景上混入 4% 黑色、深色背景上混入 12% 白色，再绘制为不透明 RGB；ANSI 本身没有逐单元格 alpha。紧凑状态栏紧贴在面板下方，显示模型状态、已安装 DSH 版本和累计 context 用量，不重复默认 workspace sandbox。非默认权限仍会显示，Full Access 会重点警示。`/permission` 通过 DSH 官方命令切换当前会话权限；只能在 idle 时切换，Full Access 还必须输入 `FULL ACCESS` 确认。
+- `/skills` 列出用户可调用的 skills。输入 `/skill-name` 可直接加载；slash command 和 skill catalog 会在 composer 下方显示带说明的紧凑菜单，并支持 Tab 补全。
 
 ## 界面状态
 
@@ -95,7 +95,7 @@ Herdr 0.8.0 尚未内置原生 `dsh` agent kind，因此暂不支持 `herdr agen
 }
 ```
 
-`system` 会自动跟随终端背景：先执行短时终端颜色探测，再尝试 `COLORFGBG`，必要时读取 macOS 外观，最后回退到 dark。将 `theme` 改为 `light` 或 `dark` 可以固定主题。
+`system` 会自动跟随终端背景：先用短时 OSC 11 探测并保留返回的精确 RGB，用它计算 Codex 式 composer 色；拿不到精确 RGB 时，再依次尝试 `COLORFGBG`、macOS 外观，最后回退到 dark。将 `theme` 改为 `light` 或 `dark` 可以固定主题。
 
 单次覆盖：
 

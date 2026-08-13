@@ -7,10 +7,13 @@ type ThemePreference = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 export type ThemeSource = 'env' | 'config' | 'terminal' | 'system' | 'fallback'
 
-interface ThemeResolution {
+export interface ThemeResolution {
   resolved: ResolvedTheme
   source: ThemeSource
+  composerBackground: string
 }
+
+export type Rgb = readonly [red: number, green: number, blue: number]
 
 export interface ThemePalette {
   brand: string
@@ -94,47 +97,56 @@ export function loadThemePreference(env: NodeJS.ProcessEnv = process.env): {
   return { preference: configured, configPath, explicitEnvironment: false }
 }
 
-function normalizedChannel(hex: string): number | undefined {
+function rgbChannel(hex: string): number | undefined {
   const parsed = Number.parseInt(hex, 16)
   const maximum = (16 ** hex.length) - 1
   if (!Number.isFinite(parsed) || maximum <= 0) return undefined
-  return parsed / maximum
+  return Math.round((parsed / maximum) * 255)
 }
 
-function relativeLuminance(red: number, green: number, blue: number): number {
-  const linear = (channel: number): number => channel <= 0.04045
-    ? channel / 12.92
-    : ((channel + 0.055) / 1.055) ** 2.4
-  return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+function isLightBackground([red, green, blue]: Rgb): boolean {
+  return (0.299 * red) + (0.587 * green) + (0.114 * blue) > 128
+}
+
+export function parseOsc11Background(response: string): Rgb | undefined {
+  const rgb = /(?:\u001B\]11;)?rgb:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/i.exec(response)
+  if (rgb !== null) {
+    const red = rgbChannel(rgb[1]!)
+    const green = rgbChannel(rgb[2]!)
+    const blue = rgbChannel(rgb[3]!)
+    if (red !== undefined && green !== undefined && blue !== undefined) return [red, green, blue]
+  }
+  const hex = /(?:\u001B\]11;)?#([0-9a-f]{6})/i.exec(response)?.[1]
+  if (hex === undefined) return undefined
+  return [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16),
+  ]
 }
 
 export function parseOsc11Theme(response: string): ResolvedTheme | undefined {
-  const rgb = /(?:\u001B\]11;)?rgb:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/i.exec(response)
-  let channels: [number, number, number] | undefined
-  if (rgb !== null) {
-    const red = normalizedChannel(rgb[1]!)
-    const green = normalizedChannel(rgb[2]!)
-    const blue = normalizedChannel(rgb[3]!)
-    if (red !== undefined && green !== undefined && blue !== undefined) channels = [red, green, blue]
-  } else {
-    const hex = /(?:\u001B\]11;)?#([0-9a-f]{6})/i.exec(response)?.[1]
-    if (hex !== undefined) {
-      channels = [
-        Number.parseInt(hex.slice(0, 2), 16) / 255,
-        Number.parseInt(hex.slice(2, 4), 16) / 255,
-        Number.parseInt(hex.slice(4, 6), 16) / 255,
-      ]
-    }
-  }
-  if (channels === undefined) return undefined
-  return relativeLuminance(...channels) >= 0.4 ? 'light' : 'dark'
+  const background = parseOsc11Background(response)
+  if (background === undefined) return undefined
+  return isLightBackground(background) ? 'light' : 'dark'
 }
 
-async function probeTerminalTheme(
+/** Match Codex's terminal-relative composer tint without relying on unsupported ANSI alpha. */
+export function composerBackgroundFor(background: Rgb): string {
+  const light = isLightBackground(background)
+  const foreground: Rgb = light ? [0, 0, 0] : [255, 255, 255]
+  const alpha = light ? 0.04 : 0.12
+  const blended = background.map((channel, index) => Math.trunc(
+    (foreground[index]! * alpha) + (channel * (1 - alpha)),
+  ))
+  return `#${blended.map(channel => channel.toString(16).padStart(2, '0')).join('')}`
+}
+
+async function probeTerminalBackground(
   input: NodeJS.ReadStream = process.stdin,
   output: NodeJS.WriteStream = process.stdout,
   timeoutMs = 100,
-): Promise<ResolvedTheme | undefined> {
+): Promise<Rgb | undefined> {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') return undefined
   return new Promise((resolve) => {
     const wasRaw = input.isRaw === true
@@ -143,19 +155,20 @@ async function probeTerminalTheme(
     let settled = false
     let timer: NodeJS.Timeout
 
-    const finish = (theme: ResolvedTheme | undefined): void => {
+    const finish = (background: Rgb | undefined): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       input.off('data', onData)
       if (!wasRaw) input.setRawMode(false)
       if (wasPaused) input.pause()
-      resolve(theme)
+      resolve(background)
     }
     const onData = (chunk: string | Buffer): void => {
       buffer += chunk.toString()
-      const theme = parseOsc11Theme(buffer)
-      if (theme !== undefined) finish(theme)
+      if (!buffer.includes('\u0007') && !buffer.includes('\u001B\\')) return
+      const background = parseOsc11Background(buffer)
+      if (background !== undefined) finish(background)
     }
 
     input.setRawMode(true)
@@ -189,19 +202,30 @@ export async function resolveTheme(env: NodeJS.ProcessEnv = process.env): Promis
     return {
       resolved: loaded.preference,
       source: loaded.explicitEnvironment ? 'env' : 'config',
+      composerBackground: themePalettes[loaded.preference].composerBackground,
     }
   }
-  const terminal = await probeTerminalTheme()
-  if (terminal !== undefined) {
-    return { resolved: terminal, source: 'terminal' }
+  const terminalBackground = await probeTerminalBackground()
+  if (terminalBackground !== undefined) {
+    return {
+      resolved: isLightBackground(terminalBackground) ? 'light' : 'dark',
+      source: 'terminal',
+      composerBackground: composerBackgroundFor(terminalBackground),
+    }
   }
   const colorEnvironment = colorFgBgTheme(env.COLORFGBG)
   if (colorEnvironment !== undefined) {
-    return { resolved: colorEnvironment, source: 'terminal' }
+    return {
+      resolved: colorEnvironment,
+      source: 'terminal',
+      composerBackground: themePalettes[colorEnvironment].composerBackground,
+    }
   }
   const system = macOSSystemTheme()
+  const resolved = system ?? 'dark'
   return {
-    resolved: system ?? 'dark',
+    resolved,
     source: system === undefined ? 'fallback' : 'system',
+    composerBackground: themePalettes[resolved].composerBackground,
   }
 }

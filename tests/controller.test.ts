@@ -4,6 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   applyCompletion,
   completionCandidates,
+  completionMenuItems,
   TuiController,
   internals,
   permissionLabel,
@@ -277,14 +278,24 @@ describe('input helpers', () => {
       .toBe('please use /status-helper')
     expect(completionCandidates('/skill already', [])).toBeUndefined()
 
-    const preview = (internals as unknown as {
-      completionPreview?: (candidates: readonly string[], selected?: string, maxLength?: number) => string
-    }).completionPreview
-    expect(preview).toBeTypeOf('function')
-    expect(preview?.(['/skills', '/status', '/shadow-mode', '/systematic-debugging'], undefined, 28))
-      .toBe('/skills · /status · …')
-    expect(preview?.(['/skills', '/status', '/systematic-debugging'], '/systematic-debugging', 28))
-      .toBe('/systematic-debugging · …')
+    expect(completionMenuItems(
+      ['/skills', '/status', '/shadow-mode', '/systematic-debugging', '/sites'],
+      [
+        { name: 'shadow-mode', description: 'Observe without changing files.' },
+        { name: 'systematic-debugging', description: 'Debug methodically.' },
+        { name: 'sites', description: 'Build a site.' },
+      ],
+      '/systematic-debugging',
+    )).toEqual([
+      { command: '/systematic-debugging', description: 'Debug methodically.', selected: true },
+      { command: '/skills', description: 'list available skills', selected: false },
+      {
+        command: '/status',
+        description: 'show session, model, permission, and usage details',
+        selected: false,
+      },
+      { command: '/shadow-mode', description: 'Observe without changing files.', selected: false },
+    ])
   })
 })
 

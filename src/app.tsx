@@ -5,8 +5,8 @@ import type { TranscriptItem } from './controller.js'
 import {
   applyCompletion,
   completionCandidates,
+  completionMenuItems,
   contextUsageLabel,
-  internals,
   TuiController,
   permissionLabel,
 } from './controller.js'
@@ -91,7 +91,10 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
   const pendingCompletion = prompt === undefined ? completionCandidates(value, state.skills) : undefined
   const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? []
   const selectedCompletion = activeCompletion?.candidates[activeCompletion.index]
-  const completionPreview = internals.completionPreview(completionOptions, selectedCompletion)
+  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion)
+  const completionCommandWidth = completionMenu.length === 0
+    ? 0
+    : Math.min(28, Math.max(...completionMenu.map(option => option.command.length)) + 2)
   const promptLabel = prompt === undefined
     ? state.status === 'running' ? 'steer › ' : 'you › '
     : prompt.kind === 'approval' ? 'allow › '
@@ -129,13 +132,10 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
       )}
 
       {state.notice === undefined ? null : <Text color={palette.muted}>{state.notice}</Text>}
-      {prompt !== undefined || completionOptions.length === 0 ? null : (
-        <Text color={palette.muted}>⇥ {completionPreview}</Text>
-      )}
       <Box
         marginTop={1}
         flexDirection="column"
-        backgroundColor={palette.composerBackground}
+        backgroundColor={state.composerBackground ?? palette.composerBackground}
         paddingX={1}
         paddingY={1}
         width="100%"
@@ -146,27 +146,51 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
             <TextInput value={value} onChange={changeValue} onSubmit={submit} />
           </Box>
         </Box>
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={palette.muted}>
-            {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
-          </Text>
-          {state.dshUpgrade === undefined ? null : (
-            <Text color={palette.warning}>
-              {'↑ DSH '}{state.dshUpgrade.version}{' available · '}{state.dshUpgrade.command}
-            </Text>
-          )}
-          <Text>
-            {showPermission ? (
-              <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
-                {permissionLabel(preset)}{' · '}
-              </Text>
-            ) : null}
-            <Text color={palette.muted}>
-              {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
-              {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
-            </Text>
-          </Text>
+      </Box>
+      {prompt !== undefined || completionMenu.length === 0 ? null : (
+        <Box flexDirection="column" paddingLeft={promptLabel.length + 1} width="100%">
+          {completionMenu.map(item => (
+            <Box key={item.command} width="100%">
+              <Box width={completionCommandWidth}>
+                {item.selected ? (
+                  <Text
+                    bold
+                    color={palette.user}
+                    wrap="truncate-end"
+                  >
+                    {item.command}
+                  </Text>
+                ) : <Text wrap="truncate-end">{item.command}</Text>}
+              </Box>
+              <Box flexGrow={1}>
+                <Text color={item.selected ? palette.user : palette.muted} wrap="truncate-end">
+                  {item.description}
+                </Text>
+              </Box>
+            </Box>
+          ))}
         </Box>
+      )}
+      <Box flexDirection="column" paddingLeft={1} width="100%">
+        <Text color={palette.muted}>
+          {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
+        </Text>
+        {state.dshUpgrade === undefined ? null : (
+          <Text color={palette.warning}>
+            {'↑ DSH '}{state.dshUpgrade.version}{' available · '}{state.dshUpgrade.command}
+          </Text>
+        )}
+        <Text>
+          {showPermission ? (
+            <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+              {permissionLabel(preset)}{' · '}
+            </Text>
+          ) : null}
+          <Text color={palette.muted}>
+            {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
+            {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
+          </Text>
+        </Text>
       </Box>
     </Box>
   )

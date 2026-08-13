@@ -107,13 +107,21 @@ function toolDetail(name2, rawArguments) {
   }
   return truncate(rawArguments);
 }
-var BUILTIN_COMMANDS = ["help", "status", "cancel", "quit", "exit", "permission", "skills"];
+var BUILTIN_COMMANDS = [
+  { name: "help", description: "show available commands and shortcuts" },
+  { name: "status", description: "show session, model, permission, and usage details" },
+  { name: "cancel", description: "cancel the current turn" },
+  { name: "quit", description: "save the session and exit" },
+  { name: "exit", description: "save the session and exit" },
+  { name: "permission", description: "change sandbox and approval settings" },
+  { name: "skills", description: "list available skills" }
+];
 function completionCandidates(input, skills) {
   const match = /(?:^|\s)(\/[a-z0-9-]*)$/.exec(input);
   const token = match?.[1];
   if (token === void 0) return void 0;
-  const builtIns = BUILTIN_COMMANDS.map((command) => `/${command}`).filter((candidate) => candidate.startsWith(token)).sort((left, right) => left.localeCompare(right));
-  const builtInSet = new Set(BUILTIN_COMMANDS.map((command) => `/${command}`));
+  const builtIns = BUILTIN_COMMANDS.map((command) => `/${command.name}`).filter((candidate) => candidate.startsWith(token)).sort((left, right) => left.localeCompare(right));
+  const builtInSet = new Set(BUILTIN_COMMANDS.map((command) => `/${command.name}`));
   const skillCandidates = [...new Set(skills.map((skill) => `/${skill.name}`))].filter((candidate) => candidate.startsWith(token) && !builtInSet.has(candidate)).sort((left, right) => left.localeCompare(right));
   const candidates = [...builtIns, ...skillCandidates];
   if (candidates.length === 0) return void 0;
@@ -123,19 +131,25 @@ function completionCandidates(input, skills) {
     candidates
   };
 }
+function completionMenuItems(candidates, skills, selected, maxItems = 4) {
+  const active = selected ?? candidates[0];
+  const ordered = active === void 0 ? [...candidates] : [active, ...candidates.filter((candidate) => candidate !== active)];
+  const builtInDescriptions = new Map(BUILTIN_COMMANDS.map((command) => [
+    `/${command.name}`,
+    command.description
+  ]));
+  const skillDescriptions = new Map(skills.map((skill) => [`/${skill.name}`, skill.description]));
+  return ordered.slice(0, Math.max(0, maxItems)).map((command) => {
+    const description = builtInDescriptions.get(command) ?? skillDescriptions.get(command) ?? "load this skill";
+    return {
+      command,
+      description: truncate(description),
+      selected: command === active
+    };
+  });
+}
 function applyCompletion(input, match, candidate) {
   return `${input.slice(0, match.start)}${candidate}${input.slice(match.end)}`;
-}
-function completionPreview(candidates, selected, maxLength = 44) {
-  const ordered = selected === void 0 ? [...candidates] : [selected, ...candidates.filter((candidate) => candidate !== selected)];
-  const shown = [];
-  for (const candidate of ordered) {
-    const next = [...shown, candidate].join(" \xB7 ");
-    const hasMore = shown.length + 1 < ordered.length;
-    if (shown.length > 0 && `${next}${hasMore ? " \xB7 \u2026" : ""}`.length > maxLength) break;
-    shown.push(candidate);
-  }
-  return `${shown.join(" \xB7 ")}${shown.length < ordered.length ? " \xB7 \u2026" : ""}`;
 }
 var TuiController = class {
   constructor(onExit, deps = {}) {
@@ -157,6 +171,7 @@ var TuiController = class {
     notice: void 0,
     theme: "dark",
     themeSource: "fallback",
+    composerBackground: void 0,
     permission: { preset: null, sandbox: null, approval: null },
     permissionPreset: "default",
     usage: EMPTY_USAGE,
@@ -210,7 +225,8 @@ var TuiController = class {
   setTheme(theme) {
     this.update({
       theme: theme.resolved,
-      themeSource: theme.source
+      themeSource: theme.source,
+      composerBackground: theme.composerBackground
     });
   }
   setContextWindow(contextWindow) {
@@ -618,13 +634,6 @@ var TuiController = class {
     return selected.length > 0 ? { id: question.id, selected } : { id: question.id, selected: [], custom: raw.trim() };
   }
 };
-var internals = {
-  contentText,
-  messageText,
-  truncate,
-  normalizeAnswer,
-  completionPreview
-};
 
 // src/theme.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -692,38 +701,41 @@ function loadThemePreference(env = process.env) {
   const configured = parsePreference(document.theme ?? "system", `${configPath}: theme`);
   return { preference: configured, configPath, explicitEnvironment: false };
 }
-function normalizedChannel(hex) {
+function rgbChannel(hex) {
   const parsed = Number.parseInt(hex, 16);
   const maximum = 16 ** hex.length - 1;
   if (!Number.isFinite(parsed) || maximum <= 0) return void 0;
-  return parsed / maximum;
+  return Math.round(parsed / maximum * 255);
 }
-function relativeLuminance(red, green, blue) {
-  const linear = (channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-  return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+function isLightBackground([red, green, blue]) {
+  return 0.299 * red + 0.587 * green + 0.114 * blue > 128;
 }
-function parseOsc11Theme(response) {
+function parseOsc11Background(response) {
   const rgb = /(?:\u001B\]11;)?rgb:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/i.exec(response);
-  let channels;
   if (rgb !== null) {
-    const red = normalizedChannel(rgb[1]);
-    const green = normalizedChannel(rgb[2]);
-    const blue = normalizedChannel(rgb[3]);
-    if (red !== void 0 && green !== void 0 && blue !== void 0) channels = [red, green, blue];
-  } else {
-    const hex = /(?:\u001B\]11;)?#([0-9a-f]{6})/i.exec(response)?.[1];
-    if (hex !== void 0) {
-      channels = [
-        Number.parseInt(hex.slice(0, 2), 16) / 255,
-        Number.parseInt(hex.slice(2, 4), 16) / 255,
-        Number.parseInt(hex.slice(4, 6), 16) / 255
-      ];
-    }
+    const red = rgbChannel(rgb[1]);
+    const green = rgbChannel(rgb[2]);
+    const blue = rgbChannel(rgb[3]);
+    if (red !== void 0 && green !== void 0 && blue !== void 0) return [red, green, blue];
   }
-  if (channels === void 0) return void 0;
-  return relativeLuminance(...channels) >= 0.4 ? "light" : "dark";
+  const hex = /(?:\u001B\]11;)?#([0-9a-f]{6})/i.exec(response)?.[1];
+  if (hex === void 0) return void 0;
+  return [
+    Number.parseInt(hex.slice(0, 2), 16),
+    Number.parseInt(hex.slice(2, 4), 16),
+    Number.parseInt(hex.slice(4, 6), 16)
+  ];
 }
-async function probeTerminalTheme(input = process.stdin, output = process.stdout, timeoutMs = 100) {
+function composerBackgroundFor(background) {
+  const light = isLightBackground(background);
+  const foreground = light ? [0, 0, 0] : [255, 255, 255];
+  const alpha = light ? 0.04 : 0.12;
+  const blended = background.map((channel, index) => Math.trunc(
+    foreground[index] * alpha + channel * (1 - alpha)
+  ));
+  return `#${blended.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+async function probeTerminalBackground(input = process.stdin, output = process.stdout, timeoutMs = 100) {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") return void 0;
   return new Promise((resolve) => {
     const wasRaw = input.isRaw === true;
@@ -731,19 +743,20 @@ async function probeTerminalTheme(input = process.stdin, output = process.stdout
     let buffer = "";
     let settled = false;
     let timer;
-    const finish = (theme) => {
+    const finish = (background) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       input.off("data", onData);
       if (!wasRaw) input.setRawMode(false);
       if (wasPaused) input.pause();
-      resolve(theme);
+      resolve(background);
     };
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const theme = parseOsc11Theme(buffer);
-      if (theme !== void 0) finish(theme);
+      if (!buffer.includes("\x07") && !buffer.includes("\x1B\\")) return;
+      const background = parseOsc11Background(buffer);
+      if (background !== void 0) finish(background);
     };
     input.setRawMode(true);
     input.on("data", onData);
@@ -772,21 +785,32 @@ async function resolveTheme(env = process.env) {
   if (loaded.preference !== "system") {
     return {
       resolved: loaded.preference,
-      source: loaded.explicitEnvironment ? "env" : "config"
+      source: loaded.explicitEnvironment ? "env" : "config",
+      composerBackground: themePalettes[loaded.preference].composerBackground
     };
   }
-  const terminal = await probeTerminalTheme();
-  if (terminal !== void 0) {
-    return { resolved: terminal, source: "terminal" };
+  const terminalBackground = await probeTerminalBackground();
+  if (terminalBackground !== void 0) {
+    return {
+      resolved: isLightBackground(terminalBackground) ? "light" : "dark",
+      source: "terminal",
+      composerBackground: composerBackgroundFor(terminalBackground)
+    };
   }
   const colorEnvironment = colorFgBgTheme(env.COLORFGBG);
   if (colorEnvironment !== void 0) {
-    return { resolved: colorEnvironment, source: "terminal" };
+    return {
+      resolved: colorEnvironment,
+      source: "terminal",
+      composerBackground: themePalettes[colorEnvironment].composerBackground
+    };
   }
   const system = macOSSystemTheme();
+  const resolved = system ?? "dark";
   return {
-    resolved: system ?? "dark",
-    source: system === void 0 ? "fallback" : "system"
+    resolved,
+    source: system === void 0 ? "fallback" : "system",
+    composerBackground: themePalettes[resolved].composerBackground
   };
 }
 
@@ -871,7 +895,8 @@ function App({ controller }) {
   const pendingCompletion = prompt === void 0 ? completionCandidates(value, state.skills) : void 0;
   const completionOptions = activeCompletion?.candidates ?? pendingCompletion?.candidates ?? [];
   const selectedCompletion = activeCompletion?.candidates[activeCompletion.index];
-  const completionPreview2 = internals.completionPreview(completionOptions, selectedCompletion);
+  const completionMenu = completionMenuItems(completionOptions, state.skills, selectedCompletion);
+  const completionCommandWidth = completionMenu.length === 0 ? 0 : Math.min(28, Math.max(...completionMenu.map((option) => option.command.length)) + 2);
   const promptLabel = prompt === void 0 ? state.status === "running" ? "steer \u203A " : "you \u203A " : prompt.kind === "approval" ? "allow \u203A " : prompt.kind === "permission" || prompt.kind === "permission-confirm" ? "permission \u203A " : "answer \u203A ";
   const preset = state.permissionPreset;
   const fullAccess = preset === "danger-full-access";
@@ -897,54 +922,60 @@ function App({ controller }) {
       ] })
     ] }),
     state.notice === void 0 ? null : /* @__PURE__ */ jsx(Text, { color: palette.muted, children: state.notice }),
-    prompt !== void 0 || completionOptions.length === 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-      "\u21E5 ",
-      completionPreview2
-    ] }),
-    /* @__PURE__ */ jsxs(
+    /* @__PURE__ */ jsx(
       Box,
       {
         marginTop: 1,
         flexDirection: "column",
-        backgroundColor: palette.composerBackground,
+        backgroundColor: state.composerBackground ?? palette.composerBackground,
         paddingX: 1,
         paddingY: 1,
         width: "100%",
-        children: [
-          /* @__PURE__ */ jsxs(Box, { children: [
-            /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
-            /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
-          ] }),
-          /* @__PURE__ */ jsxs(Box, { flexDirection: "column", marginTop: 1, children: [
-            /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-              model,
-              " \xB7 ",
-              state.status,
-              " \xB7 dsh ",
-              state.dshVersion ?? "unknown"
-            ] }),
-            state.dshUpgrade === void 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.warning, children: [
-              "\u2191 DSH ",
-              state.dshUpgrade.version,
-              " available \xB7 ",
-              state.dshUpgrade.command
-            ] }),
-            /* @__PURE__ */ jsxs(Text, { children: [
-              showPermission ? /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
-                permissionLabel(preset),
-                " \xB7 "
-              ] }) : null,
-              /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-                contextUsageLabel(state.usage, state.contextWindow),
-                " \xB7 Ctrl+C ",
-                state.status === "running" ? "cancel" : "exit",
-                " \xB7 /help"
-              ] })
-            ] })
-          ] })
-        ]
+        children: /* @__PURE__ */ jsxs(Box, { children: [
+          /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
+          /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
+        ] })
       }
-    )
+    ),
+    prompt !== void 0 || completionMenu.length === 0 ? null : /* @__PURE__ */ jsx(Box, { flexDirection: "column", paddingLeft: promptLabel.length + 1, width: "100%", children: completionMenu.map((item) => /* @__PURE__ */ jsxs(Box, { width: "100%", children: [
+      /* @__PURE__ */ jsx(Box, { width: completionCommandWidth, children: item.selected ? /* @__PURE__ */ jsx(
+        Text,
+        {
+          bold: true,
+          color: palette.user,
+          wrap: "truncate-end",
+          children: item.command
+        }
+      ) : /* @__PURE__ */ jsx(Text, { wrap: "truncate-end", children: item.command }) }),
+      /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(Text, { color: item.selected ? palette.user : palette.muted, wrap: "truncate-end", children: item.description }) })
+    ] }, item.command)) }),
+    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", paddingLeft: 1, width: "100%", children: [
+      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+        model,
+        " \xB7 ",
+        state.status,
+        " \xB7 dsh ",
+        state.dshVersion ?? "unknown"
+      ] }),
+      state.dshUpgrade === void 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.warning, children: [
+        "\u2191 DSH ",
+        state.dshUpgrade.version,
+        " available \xB7 ",
+        state.dshUpgrade.command
+      ] }),
+      /* @__PURE__ */ jsxs(Text, { children: [
+        showPermission ? /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
+          permissionLabel(preset),
+          " \xB7 "
+        ] }) : null,
+        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+          contextUsageLabel(state.usage, state.contextWindow),
+          " \xB7 Ctrl+C ",
+          state.status === "running" ? "cancel" : "exit",
+          " \xB7 /help"
+        ] })
+      ] })
+    ] })
   ] });
 }
 

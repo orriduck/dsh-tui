@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   colorFgBgTheme,
+  composerBackgroundFor,
   loadThemePreference,
+  parseOsc11Background,
   parseOsc11Theme,
   themePalettes,
   themeConfigPath,
@@ -61,6 +63,14 @@ describe('automatic theme detection', () => {
   it('uses distinct neutral composer surfaces for light and dark terminals', () => {
     expect(themePalettes.light.composerBackground).toBe('#e7e7e7')
     expect(themePalettes.dark.composerBackground).toBe('#2c2c2c')
+  })
+
+  it('preserves the OSC 11 RGB value and derives the same opaque tint as Codex', () => {
+    expect(parseOsc11Background('\u001B]11;rgb:f5f5/f5f5/f5f5\u0007')).toEqual([245, 245, 245])
+    expect(parseOsc11Background('\u001B]11;#123456\u001B\\')).toEqual([18, 52, 86])
+    expect(composerBackgroundFor([255, 255, 255])).toBe('#f4f4f4')
+    expect(composerBackgroundFor([0, 0, 0])).toBe('#1e1e1e')
+    expect(composerBackgroundFor([18, 52, 86])).toBe('#2e4c6a')
   })
 
   it('classifies common OSC 11 terminal background responses', () => {

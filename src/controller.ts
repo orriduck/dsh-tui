@@ -9,7 +9,7 @@ import type {
   AskUserQuestionItem,
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
-import type { ResolvedTheme, ThemeSource } from './theme.js'
+import type { ResolvedTheme, ThemeResolution, ThemeSource } from './theme.js'
 
 type ToolTranscriptItem = {
   id: string
@@ -98,6 +98,7 @@ interface TuiState {
   notice: string | undefined
   theme: ResolvedTheme
   themeSource: ThemeSource
+  composerBackground: string | undefined
   permission: PermissionState
   /** Display preset: last selected, derived `custom`, or `default` before any override. */
   permissionPreset: string
@@ -198,7 +199,15 @@ function toolDetail(name: string, rawArguments: unknown): string {
   return truncate(rawArguments)
 }
 
-const BUILTIN_COMMANDS = ['help', 'status', 'cancel', 'quit', 'exit', 'permission', 'skills'] as const
+const BUILTIN_COMMANDS = [
+  { name: 'help', description: 'show available commands and shortcuts' },
+  { name: 'status', description: 'show session, model, permission, and usage details' },
+  { name: 'cancel', description: 'cancel the current turn' },
+  { name: 'quit', description: 'save the session and exit' },
+  { name: 'exit', description: 'save the session and exit' },
+  { name: 'permission', description: 'change sandbox and approval settings' },
+  { name: 'skills', description: 'list available skills' },
+] as const
 
 interface CompletionMatch {
   start: number
@@ -214,10 +223,10 @@ export function completionCandidates(
   const token = match?.[1]
   if (token === undefined) return undefined
   const builtIns = BUILTIN_COMMANDS
-    .map(command => `/${command}`)
+    .map(command => `/${command.name}`)
     .filter(candidate => candidate.startsWith(token))
     .sort((left, right) => left.localeCompare(right))
-  const builtInSet: ReadonlySet<string> = new Set(BUILTIN_COMMANDS.map(command => `/${command}`))
+  const builtInSet: ReadonlySet<string> = new Set(BUILTIN_COMMANDS.map(command => `/${command.name}`))
   const skillCandidates = [...new Set(skills.map(skill => `/${skill.name}`))]
     .filter(candidate => candidate.startsWith(token) && !builtInSet.has(candidate))
     .sort((left, right) => left.localeCompare(right))
@@ -230,30 +239,47 @@ export function completionCandidates(
   }
 }
 
+export interface CompletionMenuItem {
+  command: string
+  description: string
+  selected: boolean
+}
+
+/** Project matching slash candidates into the compact Codex-style menu shown below the composer. */
+export function completionMenuItems(
+  candidates: readonly string[],
+  skills: readonly SkillEntry[],
+  selected?: string,
+  maxItems = 4,
+): CompletionMenuItem[] {
+  const active = selected ?? candidates[0]
+  const ordered = active === undefined
+    ? [...candidates]
+    : [active, ...candidates.filter(candidate => candidate !== active)]
+  const builtInDescriptions = new Map(BUILTIN_COMMANDS.map(command => [
+    `/${command.name}`,
+    command.description,
+  ]))
+  const skillDescriptions = new Map(skills.map(skill => [`/${skill.name}`, skill.description]))
+
+  return ordered.slice(0, Math.max(0, maxItems)).map(command => {
+    const description = builtInDescriptions.get(command)
+      ?? skillDescriptions.get(command)
+      ?? 'load this skill'
+    return {
+      command,
+      description: truncate(description),
+      selected: command === active,
+    }
+  })
+}
+
 export function applyCompletion(
   input: string,
   match: Pick<CompletionMatch, 'start' | 'end'>,
   candidate: string,
 ): string {
   return `${input.slice(0, match.start)}${candidate}${input.slice(match.end)}`
-}
-
-function completionPreview(
-  candidates: readonly string[],
-  selected?: string,
-  maxLength = 44,
-): string {
-  const ordered = selected === undefined
-    ? [...candidates]
-    : [selected, ...candidates.filter(candidate => candidate !== selected)]
-  const shown: string[] = []
-  for (const candidate of ordered) {
-    const next = [...shown, candidate].join(' · ')
-    const hasMore = shown.length + 1 < ordered.length
-    if (shown.length > 0 && `${next}${hasMore ? ' · …' : ''}`.length > maxLength) break
-    shown.push(candidate)
-  }
-  return `${shown.join(' · ')}${shown.length < ordered.length ? ' · …' : ''}`
 }
 
 export class TuiController {
@@ -270,6 +296,7 @@ export class TuiController {
     notice: undefined,
     theme: 'dark',
     themeSource: 'fallback',
+    composerBackground: undefined,
     permission: { preset: null, sandbox: null, approval: null },
     permissionPreset: 'default',
     usage: EMPTY_USAGE,
@@ -333,10 +360,11 @@ export class TuiController {
     this.update({ status })
   }
 
-  setTheme(theme: { resolved: ResolvedTheme; source: ThemeSource }): void {
+  setTheme(theme: ThemeResolution): void {
     this.update({
       theme: theme.resolved,
       themeSource: theme.source,
+      composerBackground: theme.composerBackground,
     })
   }
 
@@ -776,5 +804,4 @@ export const internals = {
   messageText,
   truncate,
   normalizeAnswer,
-  completionPreview,
 }
