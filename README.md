@@ -57,7 +57,7 @@ Inside the UI:
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
 - `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
-- A neutral composer surface keeps input and its compact two-line status together. Its background follows the resolved light/dark theme; the status shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- A continuous neutral composer surface keeps input and its compact two-line status together, with a blank row of breathing room between them. Its background follows the resolved light/dark theme; the status shows model state, installed DSH version, and accumulated context usage without repeating the default workspace sandbox. Non-default permission states remain visible, with Full Access emphasized. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
 - `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills offer Tab completion.
 
 ## Interface states

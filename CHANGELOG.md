@@ -4,6 +4,12 @@ All notable changes to dsh-tui are documented here. `package.json` is the machin
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-08-13
+
+### Changed
+
+- Kept the composer as one continuous neutral surface and added a full blank row between input and bottom-aligned status.
+
 ## [0.4.0] - 2026-08-13
 
 ### Added
@@ -64,7 +70,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Initial same-process DeepSeek Harness TUI bundle.
 - Streaming text and reasoning, tool rows, approvals, questions, cancellation, status, and durable session continuation.
 
-[0.4.0]: https://github.com/orriduck/dsh-tui/compare/d69fd3f...HEAD
+[0.4.1]: https://github.com/orriduck/dsh-tui/compare/03ee02d...HEAD
+[0.4.0]: https://github.com/orriduck/dsh-tui/compare/d69fd3f...03ee02d
 [0.3.1]: https://github.com/orriduck/dsh-tui/compare/06ceacd...d69fd3f
 [0.3.0]: https://github.com/orriduck/dsh-tui/compare/a1325b7...06ceacd
 [0.2.1]: https://github.com/orriduck/dsh-tui/compare/10f73e1...4829e80

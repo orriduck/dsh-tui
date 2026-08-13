@@ -915,29 +915,31 @@ function App({ controller }) {
             /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
             /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
           ] }),
-          /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-            model,
-            " \xB7 ",
-            state.status,
-            " \xB7 dsh ",
-            state.dshVersion ?? "unknown"
-          ] }),
-          state.dshUpgrade === void 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.warning, children: [
-            "\u2191 DSH ",
-            state.dshUpgrade.version,
-            " available \xB7 ",
-            state.dshUpgrade.command
-          ] }),
-          /* @__PURE__ */ jsxs(Text, { children: [
-            showPermission ? /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
-              permissionLabel(preset),
-              " \xB7 "
-            ] }) : null,
+          /* @__PURE__ */ jsxs(Box, { flexDirection: "column", marginTop: 1, children: [
             /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-              contextUsageLabel(state.usage, state.contextWindow),
-              " \xB7 Ctrl+C ",
-              state.status === "running" ? "cancel" : "exit",
-              " \xB7 /help"
+              model,
+              " \xB7 ",
+              state.status,
+              " \xB7 dsh ",
+              state.dshVersion ?? "unknown"
+            ] }),
+            state.dshUpgrade === void 0 ? null : /* @__PURE__ */ jsxs(Text, { color: palette.warning, children: [
+              "\u2191 DSH ",
+              state.dshUpgrade.version,
+              " available \xB7 ",
+              state.dshUpgrade.command
+            ] }),
+            /* @__PURE__ */ jsxs(Text, { children: [
+              showPermission ? /* @__PURE__ */ jsxs(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: [
+                permissionLabel(preset),
+                " \xB7 "
+              ] }) : null,
+              /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+                contextUsageLabel(state.usage, state.contextWindow),
+                " \xB7 Ctrl+C ",
+                state.status === "running" ? "cancel" : "exit",
+                " \xB7 /help"
+              ] })
             ] })
           ] })
         ]

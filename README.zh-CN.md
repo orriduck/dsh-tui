@@ -57,7 +57,7 @@ dsh-tui -r <session-id>         # 恢复指定会话
 - `Ctrl+C` 在运行中取消 turn，idle 时保存并退出。
 - 内置 `/status`、`/permission`、`/skills`、`/cancel`、`/help`、`/quit` 和 `/exit`。
 - 工具调用、reasoning、审批和 `ask_user_question` 都直接显示在终端里。
-- 中性背景的 composer 将输入和紧凑的两行状态收在同一块面板中，背景会随 light/dark 主题变化；状态栏显示模型状态、已安装 DSH 版本和累计 context 用量，不重复默认 workspace sandbox。非默认权限仍会显示，Full Access 会重点警示。`/permission` 通过 DSH 官方命令切换当前会话权限；只能在 idle 时切换，Full Access 还必须输入 `FULL ACCESS` 确认。
+- 连续中性背景的 composer 将输入和紧凑的两行状态收在同一块面板中，两者之间留出一整行呼吸空间。背景会随 light/dark 主题变化；状态栏显示模型状态、已安装 DSH 版本和累计 context 用量，不重复默认 workspace sandbox。非默认权限仍会显示，Full Access 会重点警示。`/permission` 通过 DSH 官方命令切换当前会话权限；只能在 idle 时切换，Full Access 还必须输入 `FULL ACCESS` 确认。
 - `/skills` 列出用户可调用的 skills。输入 `/skill-name` 可直接加载；slash command 和 skill catalog 支持 Tab 补全。
 
 ## 界面状态

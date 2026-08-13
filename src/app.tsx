@@ -146,25 +146,27 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
             <TextInput value={value} onChange={changeValue} onSubmit={submit} />
           </Box>
         </Box>
-        <Text color={palette.muted}>
-          {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
-        </Text>
-        {state.dshUpgrade === undefined ? null : (
-          <Text color={palette.warning}>
-            {'↑ DSH '}{state.dshUpgrade.version}{' available · '}{state.dshUpgrade.command}
-          </Text>
-        )}
-        <Text>
-          {showPermission ? (
-            <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
-              {permissionLabel(preset)}{' · '}
-            </Text>
-          ) : null}
+        <Box flexDirection="column" marginTop={1}>
           <Text color={palette.muted}>
-            {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
-            {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
+            {model}{' · '}{state.status}{' · dsh '}{state.dshVersion ?? 'unknown'}
           </Text>
-        </Text>
+          {state.dshUpgrade === undefined ? null : (
+            <Text color={palette.warning}>
+              {'↑ DSH '}{state.dshUpgrade.version}{' available · '}{state.dshUpgrade.command}
+            </Text>
+          )}
+          <Text>
+            {showPermission ? (
+              <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+                {permissionLabel(preset)}{' · '}
+              </Text>
+            ) : null}
+            <Text color={palette.muted}>
+              {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
+              {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
+            </Text>
+          </Text>
+        </Box>
       </Box>
     </Box>
   )
