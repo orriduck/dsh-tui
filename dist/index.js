@@ -867,32 +867,8 @@ function App({ controller }) {
   const fullAccess = preset === "danger-full-access";
   const sandbox = state.permission.sandbox ?? "default";
   const approval = state.permission.approval ?? "default";
+  const model = state.model?.split("/").at(-1) ?? "model pending";
   return /* @__PURE__ */ jsxs(Box, { flexDirection: "column", children: [
-    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", borderStyle: "round", borderColor: palette.border, paddingX: 1, children: [
-      /* @__PURE__ */ jsxs(Text, { children: [
-        /* @__PURE__ */ jsx(Text, { bold: true, color: palette.brand, children: "dsh-tui" }),
-        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-          " \xB7 ",
-          state.title,
-          " \xB7 ",
-          state.model ?? "loading",
-          " \xB7 ",
-          state.status
-        ] })
-      ] }),
-      /* @__PURE__ */ jsxs(Text, { children: [
-        /* @__PURE__ */ jsx(Text, { color: palette.muted, children: "\u2699 " }),
-        /* @__PURE__ */ jsx(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: permissionLabel(preset) }),
-        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-          " \xB7 sandbox ",
-          sandbox,
-          " \xB7 approval ",
-          approval,
-          " \xB7 ",
-          contextUsageLabel(state.usage, state.contextWindow)
-        ] })
-      ] })
-    ] }),
     /* @__PURE__ */ jsx(Static, { items: state.items, children: (item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id) }),
     state.activeTools.map((item) => /* @__PURE__ */ jsx(TranscriptRow, { item, palette }, item.id)),
     state.reasoningText === "" ? null : /* @__PURE__ */ jsx(Box, { marginTop: 1, children: /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
@@ -916,14 +892,43 @@ function App({ controller }) {
       "\u21E5 ",
       completionPreview2
     ] }),
-    /* @__PURE__ */ jsxs(Box, { marginTop: 1, children: [
-      /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
-      /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit })
-    ] }),
-    /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
-      "Ctrl+C ",
-      state.status === "running" ? "cancel" : "exit",
-      " \xB7 /help"
+    /* @__PURE__ */ jsxs(
+      Box,
+      {
+        marginTop: 1,
+        borderStyle: "round",
+        borderColor: prompt === void 0 ? palette.border : palette.warning,
+        paddingX: 1,
+        width: "100%",
+        children: [
+          /* @__PURE__ */ jsx(Text, { color: prompt === void 0 ? palette.user : palette.warning, children: promptLabel }),
+          /* @__PURE__ */ jsx(Box, { flexGrow: 1, children: /* @__PURE__ */ jsx(TextInput, { value, onChange: changeValue, onSubmit: submit }) })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxs(Box, { flexDirection: "column", paddingX: 1, children: [
+      /* @__PURE__ */ jsxs(Text, { children: [
+        /* @__PURE__ */ jsx(Text, { color: palette.muted, children: "\u2699 " }),
+        /* @__PURE__ */ jsx(Text, { color: fullAccess ? palette.warning : palette.muted, bold: fullAccess, children: permissionLabel(preset) }),
+        /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+          " \xB7 sandbox ",
+          sandbox
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+        "approval ",
+        approval,
+        " \xB7 ",
+        model,
+        " \xB7 ",
+        state.status
+      ] }),
+      /* @__PURE__ */ jsxs(Text, { color: palette.muted, children: [
+        contextUsageLabel(state.usage, state.contextWindow),
+        " \xB7 Ctrl+C ",
+        state.status === "running" ? "cancel" : "exit",
+        " \xB7 /help"
+      ] })
     ] })
   ] });
 }

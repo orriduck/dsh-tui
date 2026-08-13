@@ -55,7 +55,7 @@ Inside the UI:
 - `Ctrl+C` cancels a running turn. When idle, it saves and exits.
 - `/status`, `/permission`, `/skills`, `/cancel`, `/help`, `/quit`, and `/exit` are available.
 - Tool calls, reasoning, approvals, and `ask_user_question` prompts render in the terminal.
-- The header always shows the current permission preset, sandbox/approval policy, and accumulated context usage. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
+- The bordered composer keeps input visually anchored; the status bar beneath it always shows the current permission preset, sandbox/approval policy, model state, and accumulated context usage. `/permission` switches this session through DSH's official command — idle only, with a typed `FULL ACCESS` confirmation for full access.
 - `/skills` lists user-invocable skills. Type `/skill-name` to load one directly; slash commands and catalog skills offer Tab completion.
 
 ## Interface states
@@ -107,7 +107,7 @@ Run `/status` inside the TUI to see the resolved theme and where it came from.
 
 This package never reads or stores a DeepSeek key itself. It uses the normal DSH credential chain, including `~/.dsh/.credentials.yaml` and supported environment variables.
 
-The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset and underlying sandbox/approval values are always visible in the header, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
+The default DSH permission preset is `workspace-write` with interactive approval. The TUI answers DSH's official `approval/request` and user-question seams; it does not bypass the sandbox. The current preset and underlying sandbox/approval values are always visible beneath the composer, and `/permission` (bare or with a preset name) switches it through the official `/permission` command — switches are idle-only, affect only the current session, and full access requires typing `FULL ACCESS` to confirm.
 
 ## Scope
 

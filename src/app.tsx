@@ -102,26 +102,10 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
   const fullAccess = preset === 'danger-full-access'
   const sandbox = state.permission.sandbox ?? 'default'
   const approval = state.permission.approval ?? 'default'
+  const model = state.model?.split('/').at(-1) ?? 'model pending'
 
   return (
     <Box flexDirection="column">
-      <Box flexDirection="column" borderStyle="round" borderColor={palette.border} paddingX={1}>
-        <Text>
-          <Text bold color={palette.brand}>dsh-tui</Text>
-          <Text color={palette.muted}> · {state.title} · {state.model ?? 'loading'} · {state.status}</Text>
-        </Text>
-        <Text>
-          <Text color={palette.muted}>⚙ </Text>
-          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
-            {permissionLabel(preset)}
-          </Text>
-          <Text color={palette.muted}>
-            {' · sandbox '}{sandbox}{' · approval '}{approval}{' · '}
-            {contextUsageLabel(state.usage, state.contextWindow)}
-          </Text>
-        </Text>
-      </Box>
-
       <Static items={state.items}>
         {(item) => <TranscriptRow key={item.id} item={item} palette={palette} />}
       </Static>
@@ -149,11 +133,36 @@ export function App({ controller }: { controller: TuiController }): React.JSX.El
       {prompt !== undefined || completionOptions.length === 0 ? null : (
         <Text color={palette.muted}>⇥ {completionPreview}</Text>
       )}
-      <Box marginTop={1}>
+      <Box
+        marginTop={1}
+        borderStyle="round"
+        borderColor={prompt === undefined ? palette.border : palette.warning}
+        paddingX={1}
+        width="100%"
+      >
         <Text color={prompt === undefined ? palette.user : palette.warning}>{promptLabel}</Text>
-        <TextInput value={value} onChange={changeValue} onSubmit={submit} />
+        <Box flexGrow={1}>
+          <TextInput value={value} onChange={changeValue} onSubmit={submit} />
+        </Box>
       </Box>
-      <Text color={palette.muted}>Ctrl+C {state.status === 'running' ? 'cancel' : 'exit'} · /help</Text>
+      <Box flexDirection="column" paddingX={1}>
+        <Text>
+          <Text color={palette.muted}>⚙ </Text>
+          <Text color={fullAccess ? palette.warning : palette.muted} bold={fullAccess}>
+            {permissionLabel(preset)}
+          </Text>
+          <Text color={palette.muted}>
+            {' · sandbox '}{sandbox}
+          </Text>
+        </Text>
+        <Text color={palette.muted}>
+          {'approval '}{approval}{' · '}{model}{' · '}{state.status}
+        </Text>
+        <Text color={palette.muted}>
+          {contextUsageLabel(state.usage, state.contextWindow)}{' · Ctrl+C '}
+          {state.status === 'running' ? 'cancel' : 'exit'}{' · /help'}
+        </Text>
+      </Box>
     </Box>
   )
 }
